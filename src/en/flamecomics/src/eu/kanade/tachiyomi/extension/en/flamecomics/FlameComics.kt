@@ -30,9 +30,10 @@ abstract class FlameComics : KeiSource() {
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::buildIdOutdatedInterceptor)
         .rateLimit(2, 2.seconds) { it.fragment != THUMBNAIL_FRAGMENT }
 
-    override suspend fun getPopularManga(page: Int): MangasPage = fetchBrowseSeries()
-        .sortedByDescending { it.views }
-        .toMangasPage(page)
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val series = fetchBrowseSeries().sortedByDescending { it.views }
+        return MangasPage(series.mapNotNull { it.toSManga() }, false)
+    }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
         val series = client.get(dataUrl { addPathSegment("index.json") })
@@ -42,22 +43,14 @@ abstract class FlameComics : KeiSource() {
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val normalizedQuery = query.normalizeTitle()
-        return fetchBrowseSeries().filter { series ->
+        val series = fetchBrowseSeries().filter { series ->
             (listOf(series.title) + series.altTitles.orEmpty()).any { normalizedQuery in it.normalizeTitle() }
-        }.toMangasPage(page)
+        }
+        return MangasPage(series.mapNotNull { it.toSManga() }, false)
     }
 
     private suspend fun fetchBrowseSeries(): List<SeriesDto> = client.get(dataUrl { addPathSegment("browse.json") })
         .parseAs<NextDataDto<BrowseDto>>().pageProps.series
-
-    private fun List<SeriesDto>.toMangasPage(page: Int): MangasPage {
-        val manga = mapNotNull { it.toSManga() }
-
-        val itemsPerPage = 20
-        val startIndex = (page - 1) * itemsPerPage
-        val endIndex = minOf(page * itemsPerPage, manga.size)
-        return MangasPage(manga.subList(startIndex, endIndex), endIndex < manga.size)
-    }
 
     private fun String.normalizeTitle() = SPECIAL_CHARS_REGEX.replace(lowercase(), "")
 
