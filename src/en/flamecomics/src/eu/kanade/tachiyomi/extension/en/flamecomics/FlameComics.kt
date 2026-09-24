@@ -4,51 +4,43 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Rect
-import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.get
 import keiyoushi.network.rateLimit
+import keiyoushi.source.KeiSource
 import keiyoushi.utils.asJsoup
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.json.Json
+import keiyoushi.utils.parseAs
+import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Protocol
-import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import uy.kohesive.injekt.injectLazy
 import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.seconds
 
 @Source
-abstract class FlameComics : HttpSource() {
-    override val supportsLatest = true
+abstract class FlameComics : KeiSource() {
     private val cdn = "https://cdn.flamecomics.xyz"
 
-    private val json: Json by injectLazy()
+    override val supportRelatedMangasBySearch = true
 
-    override val client = network.client.newBuilder()
-        .addInterceptor(::buildIdOutdatedInterceptor)
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::buildIdOutdatedInterceptor)
         .addInterceptor(::composedImageIntercept)
         .rateLimit(2, 2.seconds) { it.fragment != THUMBNAIL_FRAGMENT }
-        .build()
 
     private val removeSpecialCharsRegex = Regex("[^A-Za-z0-9 ]")
-
-    private fun dataApiReqBuilder() = baseUrl.toHttpUrl().newBuilder().apply {
-        addPathSegment("_next")
-        addPathSegment("data")
-        addPathSegment(buildId)
-    }
 
     private fun imageApiUrlBuilder() = "$cdn/uploads/images/series".toHttpUrl().newBuilder()
 
@@ -59,95 +51,34 @@ abstract class FlameComics : HttpSource() {
         fragment(THUMBNAIL_FRAGMENT)
     }.build().toString()
 
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request = GET(
-        dataApiReqBuilder().apply {
-            addPathSegment("browse.json")
-            fragment("$page&${removeSpecialCharsRegex.replace(query.lowercase(), "")}")
-        }.build(),
-        headers,
-    )
+    override suspend fun getPopularManga(page: Int): MangasPage = fetchBrowseSeries()
+        .sortedByDescending { it.views }
+        .toMangasPage(page)
 
-    override fun popularMangaRequest(page: Int): Request = GET(
-        dataApiReqBuilder().apply {
-            addPathSegment("browse.json")
-            fragment("$page")
-        }.build(),
-        headers,
-    )
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        val latestData = client.get(dataUrl { addPathSegment("index.json") }).parseAs<LatestPageData>()
+        return MangasPage(latestData.pageProps.latestEntries.blocks[0].series.map { it.toSManga() }, false)
+    }
 
-    override fun latestUpdatesRequest(page: Int): Request = GET(
-        dataApiReqBuilder().apply {
-            addPathSegment("index.json")
-        }.build(),
-        headers,
-    )
-
-    override fun searchMangaParse(response: Response): MangasPage = mangaParse(response) { seriesList ->
-        val query = response.request.url.fragment!!.split("&")[1]
-        seriesList.filter { series ->
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        val normalizedQuery = removeSpecialCharsRegex.replace(query.lowercase(), "")
+        return fetchBrowseSeries().filter { series ->
             val titles = mutableListOf(series.title)
             if (series.altTitles != null) {
                 titles += series.altTitles
             }
             titles.any { title ->
-                removeSpecialCharsRegex.replace(
-                    query.lowercase(),
-                    "",
-                ) in removeSpecialCharsRegex.replace(
-                    title.lowercase(),
-                    "",
-                )
+                normalizedQuery in removeSpecialCharsRegex.replace(title.lowercase(), "")
             }
-        }
+        }.toMangasPage(page)
     }
 
-    override fun latestUpdatesParse(response: Response): MangasPage {
-        val latestData = json.decodeFromString<LatestPageData>(response.body.string())
-        return MangasPage(
-            latestData.pageProps.latestEntries.blocks[0].series.map { seriesData ->
-                SManga.create().apply {
-                    title = seriesData.title
-                    setUrlWithoutDomain(
-                        baseUrl.toHttpUrl().newBuilder().apply {
-                            addPathSegment("series")
-                            addPathSegment(seriesData.series_id.toString())
-                        }.build().toString(),
-                    )
-                    thumbnail_url = thumbnailUrl(seriesData)
-                }
-            },
-            false,
-        )
-    }
+    private suspend fun fetchBrowseSeries(): List<Series> = client.get(dataUrl { addPathSegment("browse.json") })
+        .parseAs<SearchPageData>().pageProps.series
+        .filter { series -> series.series_id != null }
 
-    override fun popularMangaParse(response: Response): MangasPage = mangaParse(response) { list -> list.sortedByDescending { it.views } }
-
-    private fun mangaParse(
-        response: Response,
-        transform: (List<Series>) -> List<Series>,
-    ): MangasPage {
-        val searchedSeriesData =
-            json.decodeFromString<SearchPageData>(response.body.string()).pageProps.series
-                .filter { series -> series.series_id != null }
-
-        val page = if (!response.request.url.fragment?.contains("&")!!) {
-            response.request.url.fragment!!.toInt()
-        } else {
-            response.request.url.fragment!!.split("&")[0].toInt()
-        }
-
-        val manga = transform(searchedSeriesData).map { seriesData ->
-            SManga.create().apply {
-                title = seriesData.title
-                setUrlWithoutDomain(
-                    baseUrl.toHttpUrl().newBuilder().apply {
-                        addPathSegment("series")
-                        addPathSegment(seriesData.series_id.toString())
-                    }.build().toString(),
-                )
-                thumbnail_url = thumbnailUrl(seriesData)
-            }
-        }
+    private fun List<Series>.toMangasPage(page: Int): MangasPage {
+        val manga = map { it.toSManga() }
 
         val itemsPerPage = 20
         val startIndex = (page - 1) * itemsPerPage
@@ -155,24 +86,48 @@ abstract class FlameComics : HttpSource() {
         return MangasPage(manga.subList(startIndex, endIndex), endIndex < manga.size)
     }
 
-    override fun mangaDetailsRequest(manga: SManga): Request = GET(
-        dataApiReqBuilder().apply {
-            val seriesID =
-                ("$baseUrl${manga.url}").toHttpUrl().pathSegments.last()
-            addPathSegment("series")
-            addPathSegment("$seriesID.json")
-            addQueryParameter("id", seriesID)
-        }.build(),
-        headers,
-    )
+    private fun Series.toSManga() = SManga.create().apply {
+        title = this@toSManga.title
+        setUrlWithoutDomain(
+            baseUrl.toHttpUrl().newBuilder().apply {
+                addPathSegment("series")
+                addPathSegment(series_id.toString())
+            }.build().toString(),
+        )
+        thumbnail_url = thumbnailUrl(this@toSManga)
+    }
 
-    override fun chapterListRequest(manga: SManga): Request = mangaDetailsRequest(manga)
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        if (url.host != baseUrl.toHttpUrl().host || url.pathSegments.firstOrNull() != "series") return null
+        val seriesId = url.pathSegments.getOrNull(1)?.toIntOrNull() ?: return null
+        val manga = SManga.create().apply { this.url = "/series/$seriesId" }
+        return getMangaUpdate(manga, emptyList(), fetchDetails = true, fetchChapters = false).manga
+    }
 
-    override fun getMangaUrl(manga: SManga): String = "$baseUrl${manga.url}"
+    override suspend fun fetchMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        val seriesId = getMangaUrl(manga).toHttpUrl().pathSegments.last()
+        val seriesPage = client.get(
+            dataUrl {
+                addPathSegment("series")
+                addPathSegment("$seriesId.json")
+                addQueryParameter("id", seriesId)
+            },
+        ).parseAs<JsonElement>()
 
-    override fun mangaDetailsParse(response: Response): SManga = SManga.create().apply {
-        val seriesData =
-            json.decodeFromString<MangaDetailsResponseData>(response.body.string()).pageProps.series
+        return SMangaUpdate(
+            manga = mangaDetailsParse(seriesPage.parseAs<MangaDetailsResponseData>()),
+            chapters = chapterListParse(seriesPage.parseAs<ChapterListResponseData>()),
+        )
+    }
+
+    private fun mangaDetailsParse(data: MangaDetailsResponseData): SManga = SManga.create().apply {
+        val seriesData = data.pageProps.series
+        url = "/series/${seriesData.series_id}"
         title = seriesData.title
         thumbnail_url = thumbnailUrl(seriesData)
 
@@ -207,57 +162,47 @@ abstract class FlameComics : HttpSource() {
         }
     }
 
-    override fun chapterListParse(response: Response): List<SChapter> {
-        val chaptersListResponseData =
-            json.decodeFromString<ChapterListResponseData>(response.body.string())
-        return chaptersListResponseData.pageProps.chapters.map { chapter ->
-            SChapter.create().apply {
-                setUrlWithoutDomain(
-                    baseUrl.toHttpUrl().newBuilder().apply {
-                        addPathSegment("series")
-                        addPathSegment(chapter.series_id.toString())
-                        addPathSegment(chapter.token)
-                    }.build().toString(),
-                )
-                chapter_number = chapter.chapter.toFloat()
-                date_upload = chapter.release_date * 1000
-                name = buildString {
-                    append("Chapter ${chapter.chapter.toString().removeSuffix(".0")}")
-                    if (!chapter.title.isNullOrBlank()) {
-                        append(" - ${chapter.title}")
-                    }
+    private fun chapterListParse(data: ChapterListResponseData): List<SChapter> = data.pageProps.chapters.map { chapter ->
+        SChapter.create().apply {
+            setUrlWithoutDomain(
+                baseUrl.toHttpUrl().newBuilder().apply {
+                    addPathSegment("series")
+                    addPathSegment(chapter.series_id.toString())
+                    addPathSegment(chapter.token)
+                }.build().toString(),
+            )
+            chapter_number = chapter.chapter.toFloat()
+            date_upload = chapter.release_date * 1000
+            name = buildString {
+                append("Chapter ${chapter.chapter.toString().removeSuffix(".0")}")
+                if (!chapter.title.isNullOrBlank()) {
+                    append(" - ${chapter.title}")
                 }
             }
         }
     }
 
-    override fun pageListRequest(chapter: SChapter): Request = GET(
-        dataApiReqBuilder().apply {
-            val seriesID = ("$baseUrl${chapter.url}").toHttpUrl().pathSegments[1]
-            val token = ("$baseUrl${chapter.url}").toHttpUrl().pathSegments[2]
-            addPathSegment("series")
-            addPathSegment(seriesID)
-            addPathSegment("$token.json")
-            addQueryParameter("id", seriesID)
-            addQueryParameter("token", token)
-        }.build(),
-        headers,
-    )
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val (seriesId, token) = getChapterUrl(chapter).toHttpUrl().pathSegments.drop(1)
+        val chapterData = client.get(
+            dataUrl {
+                addPathSegment("series")
+                addPathSegment(seriesId)
+                addPathSegment("$token.json")
+                addQueryParameter("id", seriesId)
+                addQueryParameter("token", token)
+            },
+        ).parseAs<ChapterPageData>().pageProps.chapter
 
-    override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
-
-    override fun pageListParse(response: Response): List<Page> {
-        val chapter =
-            json.decodeFromString<ChapterPageData>(response.body.string()).pageProps.chapter
-        return chapter.images.mapIndexed { idx, page ->
+        return chapterData.images.mapIndexed { idx, page ->
             Page(
                 idx,
                 imageUrl = imageApiUrlBuilder().apply {
-                    addPathSegment(chapter.series_id.toString())
-                    addPathSegment(chapter.token)
+                    addPathSegment(chapterData.series_id.toString())
+                    addPathSegment(chapterData.token)
                     addPathSegment(page.name)
                     addQueryParameter(
-                        chapter.release_date.toString(),
+                        chapterData.release_date.toString(),
                         value = null,
                     )
                 }.build().toString(),
@@ -265,26 +210,27 @@ abstract class FlameComics : HttpSource() {
         }
     }
 
-    override fun imageUrlParse(response: Response): String = ""
+    // Next.js data routes are keyed by the site's build id, which changes on every deploy.
+    @Volatile
+    private var buildId: String? = null
 
-    private fun fetchBuildId(document: Document? = null): String {
-        val realDocument = document
-            ?: client.newCall(GET(baseUrl, headers)).execute().use { it.asJsoup() }
+    private suspend fun dataUrl(path: HttpUrl.Builder.() -> Unit): HttpUrl {
+        val id = buildId ?: fetchBuildId(client.get(baseUrl).asJsoup()).also { buildId = it }
 
-        val nextData = realDocument.selectFirst("script#__NEXT_DATA__")?.data()
-            ?: throw Exception("Failed to find __NEXT_DATA__")
-
-        val dto = json.decodeFromString<NewBuildID>(nextData)
-        return dto.buildId
+        return baseUrl.toHttpUrl().newBuilder()
+            .addPathSegment("_next")
+            .addPathSegment("data")
+            .addPathSegment(id)
+            .apply(path)
+            .build()
     }
 
-    private var buildId = ""
-        get() {
-            if (field == "") {
-                field = fetchBuildId()
-            }
-            return field
-        }
+    private fun fetchBuildId(document: Document): String {
+        val nextData = document.selectFirst("script#__NEXT_DATA__")?.data()
+            ?: throw Exception("Failed to find __NEXT_DATA__")
+
+        return nextData.parseAs<NewBuildID>().buildId
+    }
 
     private fun buildIdOutdatedInterceptor(chain: Interceptor.Chain): Response {
         val request = chain.request()
@@ -301,12 +247,12 @@ abstract class FlameComics : HttpSource() {
             response.header("Content-Type")?.contains("text/html") != false
         ) {
             // The 404 page should have the current buildId
-            val document = response.asJsoup()
-            buildId = fetchBuildId(document)
+            val newBuildId = fetchBuildId(response.asJsoup())
+            buildId = newBuildId
 
             // Redo request with new buildId
             val url = request.url.newBuilder()
-                .setPathSegment(2, buildId)
+                .setPathSegment(2, newBuildId)
                 .fragment("DO_NOT_RETRY")
                 .build()
             val newRequest = request.newBuilder()
