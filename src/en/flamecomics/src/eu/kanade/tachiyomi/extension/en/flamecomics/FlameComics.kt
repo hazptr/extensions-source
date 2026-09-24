@@ -16,7 +16,6 @@ import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.asJsoup
 import keiyoushi.utils.parseAs
-import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -25,14 +24,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.seconds
 
 @Source
 abstract class FlameComics : KeiSource() {
-    private val cdn = "https://cdn.flamecomics.xyz"
 
     override val supportRelatedMangasBySearch = true
 
@@ -40,45 +37,28 @@ abstract class FlameComics : KeiSource() {
         .addInterceptor(::composedImageIntercept)
         .rateLimit(2, 2.seconds) { it.fragment != THUMBNAIL_FRAGMENT }
 
-    private val removeSpecialCharsRegex = Regex("[^A-Za-z0-9 ]")
-
-    private fun imageApiUrlBuilder() = "$cdn/uploads/images/series".toHttpUrl().newBuilder()
-
-    private fun thumbnailUrl(seriesData: Series) = imageApiUrlBuilder().apply {
-        addPathSegment(seriesData.series_id.toString())
-        addPathSegment(seriesData.cover)
-        addQueryParameter(seriesData.last_edit.toString(), null)
-        fragment(THUMBNAIL_FRAGMENT)
-    }.build().toString()
-
     override suspend fun getPopularManga(page: Int): MangasPage = fetchBrowseSeries()
         .sortedByDescending { it.views }
         .toMangasPage(page)
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val latestData = client.get(dataUrl { addPathSegment("index.json") }).parseAs<LatestPageData>()
-        return MangasPage(latestData.pageProps.latestEntries.blocks[0].series.map { it.toSManga() }, false)
+        val series = client.get(dataUrl { addPathSegment("index.json") })
+            .parseAs<NextDataDto<LatestDto>>().pageProps.series
+        return MangasPage(series.mapNotNull { it.toSManga() }, false)
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
-        val normalizedQuery = removeSpecialCharsRegex.replace(query.lowercase(), "")
+        val normalizedQuery = query.normalizeTitle()
         return fetchBrowseSeries().filter { series ->
-            val titles = mutableListOf(series.title)
-            if (series.altTitles != null) {
-                titles += series.altTitles
-            }
-            titles.any { title ->
-                normalizedQuery in removeSpecialCharsRegex.replace(title.lowercase(), "")
-            }
+            (listOf(series.title) + series.altTitles.orEmpty()).any { normalizedQuery in it.normalizeTitle() }
         }.toMangasPage(page)
     }
 
-    private suspend fun fetchBrowseSeries(): List<Series> = client.get(dataUrl { addPathSegment("browse.json") })
-        .parseAs<SearchPageData>().pageProps.series
-        .filter { series -> series.series_id != null }
+    private suspend fun fetchBrowseSeries(): List<SeriesDto> = client.get(dataUrl { addPathSegment("browse.json") })
+        .parseAs<NextDataDto<BrowseDto>>().pageProps.series
 
-    private fun List<Series>.toMangasPage(page: Int): MangasPage {
-        val manga = map { it.toSManga() }
+    private fun List<SeriesDto>.toMangasPage(page: Int): MangasPage {
+        val manga = mapNotNull { it.toSManga() }
 
         val itemsPerPage = 20
         val startIndex = (page - 1) * itemsPerPage
@@ -86,16 +66,7 @@ abstract class FlameComics : KeiSource() {
         return MangasPage(manga.subList(startIndex, endIndex), endIndex < manga.size)
     }
 
-    private fun Series.toSManga() = SManga.create().apply {
-        title = this@toSManga.title
-        setUrlWithoutDomain(
-            baseUrl.toHttpUrl().newBuilder().apply {
-                addPathSegment("series")
-                addPathSegment(series_id.toString())
-            }.build().toString(),
-        )
-        thumbnail_url = thumbnailUrl(this@toSManga)
-    }
+    private fun String.normalizeTitle() = SPECIAL_CHARS_REGEX.replace(lowercase(), "")
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
         if (url.host != baseUrl.toHttpUrl().host || url.pathSegments.firstOrNull() != "series") return null
@@ -117,74 +88,17 @@ abstract class FlameComics : KeiSource() {
                 addPathSegment("$seriesId.json")
                 addQueryParameter("id", seriesId)
             },
-        ).parseAs<JsonElement>()
+        ).parseAs<NextDataDto<SeriesPageDto>>().pageProps
 
         return SMangaUpdate(
-            manga = mangaDetailsParse(seriesPage.parseAs<MangaDetailsResponseData>()),
-            chapters = chapterListParse(seriesPage.parseAs<ChapterListResponseData>()),
+            manga = seriesPage.series.toSMangaDetails(),
+            chapters = seriesPage.chapters.map { it.toSChapter() },
         )
-    }
-
-    private fun mangaDetailsParse(data: MangaDetailsResponseData): SManga = SManga.create().apply {
-        val seriesData = data.pageProps.series
-        url = "/series/${seriesData.series_id}"
-        title = seriesData.title
-        thumbnail_url = thumbnailUrl(seriesData)
-
-        val synopsis = seriesData.description
-            ?.let { Jsoup.parseBodyFragment(it).wholeText() }
-            .orEmpty()
-        val altNames = seriesData.altTitles.orEmpty()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-        description = buildString {
-            append(synopsis)
-            if (altNames.isNotEmpty()) {
-                if (isNotEmpty()) append("\n\n")
-                append(ALT_NAME)
-                altNames.forEach { name -> append("\n- $name") }
-            }
-        }.takeIf { it.isNotEmpty() }
-
-        genre = seriesData.tags?.let { tags ->
-            (listOf(seriesData.type) + tags).joinToString()
-        } ?: seriesData.type
-
-        author = seriesData.author?.joinToString()
-        artist = seriesData.artist?.joinToString()
-        status = when (seriesData.status.lowercase()) {
-            "ongoing" -> SManga.ONGOING
-            "dropped" -> SManga.CANCELLED
-            "hiatus" -> SManga.ON_HIATUS
-            "completed" -> SManga.COMPLETED
-            else -> SManga.UNKNOWN
-        }
-    }
-
-    private fun chapterListParse(data: ChapterListResponseData): List<SChapter> = data.pageProps.chapters.map { chapter ->
-        SChapter.create().apply {
-            setUrlWithoutDomain(
-                baseUrl.toHttpUrl().newBuilder().apply {
-                    addPathSegment("series")
-                    addPathSegment(chapter.series_id.toString())
-                    addPathSegment(chapter.token)
-                }.build().toString(),
-            )
-            chapter_number = chapter.chapter.toFloat()
-            date_upload = chapter.release_date * 1000
-            name = buildString {
-                append("Chapter ${chapter.chapter.toString().removeSuffix(".0")}")
-                if (!chapter.title.isNullOrBlank()) {
-                    append(" - ${chapter.title}")
-                }
-            }
-        }
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val (seriesId, token) = getChapterUrl(chapter).toHttpUrl().pathSegments.drop(1)
-        val chapterData = client.get(
+        return client.get(
             dataUrl {
                 addPathSegment("series")
                 addPathSegment(seriesId)
@@ -192,22 +106,7 @@ abstract class FlameComics : KeiSource() {
                 addQueryParameter("id", seriesId)
                 addQueryParameter("token", token)
             },
-        ).parseAs<ChapterPageData>().pageProps.chapter
-
-        return chapterData.images.mapIndexed { idx, page ->
-            Page(
-                idx,
-                imageUrl = imageApiUrlBuilder().apply {
-                    addPathSegment(chapterData.series_id.toString())
-                    addPathSegment(chapterData.token)
-                    addPathSegment(page.name)
-                    addQueryParameter(
-                        chapterData.release_date.toString(),
-                        value = null,
-                    )
-                }.build().toString(),
-            )
-        }
+        ).parseAs<NextDataDto<ChapterPageDto>>().pageProps.chapter.toPages()
     }
 
     // Next.js data routes are keyed by the site's build id, which changes on every deploy.
@@ -229,7 +128,7 @@ abstract class FlameComics : KeiSource() {
         val nextData = document.selectFirst("script#__NEXT_DATA__")?.data()
             ?: throw Exception("Failed to find __NEXT_DATA__")
 
-        return nextData.parseAs<NewBuildID>().buildId
+        return nextData.parseAs<BuildIdDto>().buildId
     }
 
     private fun buildIdOutdatedInterceptor(chain: Interceptor.Chain): Response {
@@ -317,11 +216,11 @@ abstract class FlameComics : KeiSource() {
             .build()
     }
     // Split Image Fixer End
-
-    companion object {
-        private const val COMPOSED_SUFFIX = "?comp"
-        private val MEDIA_TYPE = "image/png".toMediaType()
-        private const val THUMBNAIL_FRAGMENT = "thumbnail"
-        private const val ALT_NAME = "Alternative Names:"
-    }
 }
+
+private const val COMPOSED_SUFFIX = "?comp"
+private val MEDIA_TYPE = "image/png".toMediaType()
+
+internal const val THUMBNAIL_FRAGMENT = "thumbnail"
+
+private val SPECIAL_CHARS_REGEX = Regex("""[^A-Za-z0-9 ]""")
