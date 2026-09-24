@@ -1,9 +1,5 @@
 package eu.kanade.tachiyomi.extension.en.flamecomics
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Rect
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -19,13 +15,9 @@ import keiyoushi.utils.parseAs
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Protocol
 import okhttp3.Response
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.jsoup.nodes.Document
-import java.io.ByteArrayOutputStream
 import kotlin.time.Duration.Companion.seconds
 
 @Source
@@ -34,7 +26,6 @@ abstract class FlameComics : KeiSource() {
     override val supportRelatedMangasBySearch = true
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::buildIdOutdatedInterceptor)
-        .addInterceptor(::composedImageIntercept)
         .rateLimit(2, 2.seconds) { it.fragment != THUMBNAIL_FRAGMENT }
 
     override suspend fun getPopularManga(page: Int): MangasPage = fetchBrowseSeries()
@@ -163,63 +154,7 @@ abstract class FlameComics : KeiSource() {
 
         return response
     }
-
-    private fun composedImageIntercept(chain: Interceptor.Chain): Response {
-        if (!chain.request().url.toString().endsWith(COMPOSED_SUFFIX)) {
-            return chain.proceed(chain.request())
-        }
-
-        val imageUrls = chain.request().url.toString()
-            .removeSuffix(COMPOSED_SUFFIX)
-            .split("%7C")
-
-        var width = 0
-        var height = 0
-
-        val imageBitmaps = imageUrls.map { imageUrl ->
-            val request = chain.request().newBuilder().url(imageUrl).build()
-            val response = chain.proceed(request)
-
-            val bitmap = BitmapFactory.decodeStream(response.body.byteStream())
-
-            width += bitmap.width
-            height = bitmap.height
-
-            bitmap
-        }
-
-        val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(result)
-
-        var left = 0
-
-        imageBitmaps.forEach { bitmap ->
-            val srcRect = Rect(0, 0, bitmap.width, bitmap.height)
-            val dstRect = Rect(left, 0, left + bitmap.width, bitmap.height)
-
-            canvas.drawBitmap(bitmap, srcRect, dstRect, null)
-
-            left += bitmap.width
-        }
-
-        val output = ByteArrayOutputStream()
-        result.compress(Bitmap.CompressFormat.PNG, 100, output)
-
-        val responseBody = output.toByteArray().toResponseBody(MEDIA_TYPE)
-
-        return Response.Builder()
-            .code(200)
-            .protocol(Protocol.HTTP_1_1)
-            .request(chain.request())
-            .message("OK")
-            .body(responseBody)
-            .build()
-    }
-    // Split Image Fixer End
 }
-
-private const val COMPOSED_SUFFIX = "?comp"
-private val MEDIA_TYPE = "image/png".toMediaType()
 
 internal const val THUMBNAIL_FRAGMENT = "thumbnail"
 
