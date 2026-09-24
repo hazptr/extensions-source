@@ -11,13 +11,15 @@ import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.asJsoup
+import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.parseAs
+import okhttp3.CacheControl
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
-import org.jsoup.nodes.Document
+import java.io.IOException
 import kotlin.time.Duration.Companion.seconds
 
 @Source
@@ -105,7 +107,9 @@ abstract class FlameComics : KeiSource() {
     private var buildId: String? = null
 
     private suspend fun dataUrl(path: HttpUrl.Builder.() -> Unit): HttpUrl {
-        val id = buildId ?: fetchBuildId(client.get(baseUrl).asJsoup()).also { buildId = it }
+        val id = buildId
+            ?: client.get(baseUrl).asJsoup().extractNextJs<BuildIdDto>()?.buildId?.also { buildId = it }
+            ?: throw Exception("Failed to find buildId")
 
         return baseUrl.toHttpUrl().newBuilder()
             .addPathSegment("_next")
@@ -115,44 +119,31 @@ abstract class FlameComics : KeiSource() {
             .build()
     }
 
-    private fun fetchBuildId(document: Document): String {
-        val nextData = document.selectFirst("script#__NEXT_DATA__")?.data()
-            ?: throw Exception("Failed to find __NEXT_DATA__")
-
-        return nextData.parseAs<BuildIdDto>().buildId
-    }
-
     private fun buildIdOutdatedInterceptor(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val response = chain.proceed(request)
+        val url = request.url
 
         if (
-            response.code == 404 &&
-            request.url.run {
-                host == baseUrl.removePrefix("https://") &&
-                    pathSegments.getOrNull(0) == "_next" &&
-                    pathSegments.getOrNull(1) == "data" &&
-                    fragment != "DO_NOT_RETRY"
-            } &&
-            response.header("Content-Type")?.contains("text/html") != false
+            response.code != 404 ||
+            url.host != baseUrl.toHttpUrl().host ||
+            url.pathSegments.getOrNull(0) != "_next" ||
+            url.pathSegments.getOrNull(1) != "data"
         ) {
-            // The 404 page should have the current buildId
-            val newBuildId = fetchBuildId(response.asJsoup())
-            buildId = newBuildId
-
-            // Redo request with new buildId
-            val url = request.url.newBuilder()
-                .setPathSegment(2, newBuildId)
-                .fragment("DO_NOT_RETRY")
-                .build()
-            val newRequest = request.newBuilder()
-                .url(url)
-                .build()
-
-            return chain.proceed(newRequest)
+            return response
         }
+        response.close()
 
-        return response
+        val homeRequest = request.newBuilder()
+            .url(baseUrl)
+            .cacheControl(CacheControl.FORCE_NETWORK)
+            .build()
+        val newBuildId = chain.proceed(homeRequest).asJsoup().extractNextJs<BuildIdDto>()?.buildId
+            ?: throw IOException("Failed to find buildId")
+        buildId = newBuildId
+
+        val newUrl = url.newBuilder().setPathSegment(2, newBuildId).build()
+        return chain.proceed(request.newBuilder().url(newUrl).build())
     }
 }
 
