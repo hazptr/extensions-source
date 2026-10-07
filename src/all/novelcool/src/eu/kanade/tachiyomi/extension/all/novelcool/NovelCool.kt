@@ -229,13 +229,13 @@ abstract class NovelCool :
 
         val otherGroups = coroutineScope {
             doc.selectFirst(".mangaread-pagenav > .sl-page")?.select("option").orEmpty().drop(1)
-                .map { option -> async { pageClient.get(option.absUrl("value")).asJsoup() } }
+                .map { option -> async { pageClient.get(option.attr("abs:value")).asJsoup() } }
                 .awaitAll()
         }
 
         return (listOf(doc) + otherGroups)
             .flatMap { it.select("img.mangaread-manga-pic") }
-            .mapIndexed { idx, img -> Page(idx, imageUrl = img.absUrl("src")) }
+            .mapIndexed { idx, img -> Page(idx, imageUrl = img.attr("abs:src")) }
     }
 
     private fun Elements.imgAttr(): String = when {
