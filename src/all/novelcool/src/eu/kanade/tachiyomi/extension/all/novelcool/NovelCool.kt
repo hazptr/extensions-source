@@ -22,6 +22,9 @@ import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonElement
 import keiyoushi.utils.toJsonRequestBody
 import keiyoushi.utils.tryParseDate
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -184,7 +187,14 @@ abstract class NovelCool :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        var doc = pageClient.get(getChapterUrl(chapter)).asJsoup()
+        val (slug, chapterId) = getChapterUrl(chapter).toHttpUrl().pathSegments.filter(String::isNotEmpty).takeLast(2)
+        // The reader shows at most 10 images per page
+        val firstGroupUrl = baseUrl.toHttpUrl().newBuilder()
+            .addPathSegment("chapter")
+            .addPathSegment(slug)
+            .addPathSegment("$chapterId-10-1.html")
+            .build()
+        var doc = pageClient.get(firstGroupUrl).asJsoup()
 
         // Chapter pages redirect (HTTP 302) to an intermediate "choose a source" page on a
         // partner domain (e.g. techsmartideas.com). That page contains a.vision-button links
@@ -217,17 +227,15 @@ abstract class NovelCool :
             }
         }
 
-        return singlePageParse(doc)
-    }
+        val otherGroups = coroutineScope {
+            doc.selectFirst(".mangaread-pagenav > .sl-page")?.select("option").orEmpty().drop(1)
+                .map { option -> async { pageClient.get(option.absUrl("value")).asJsoup() } }
+                .awaitAll()
+        }
 
-    private fun singlePageParse(document: Document): List<Page> = document.selectFirst(".mangaread-pagenav > .sl-page")?.select("option")
-        ?.mapIndexed { idx, page ->
-            Page(idx, url = page.attr("value"))
-        } ?: emptyList()
-
-    override suspend fun getImageUrl(page: Page): String {
-        val document = client.get(page.url).asJsoup()
-        return document.select(".mangaread-manga-pic").attr("src")
+        return (listOf(doc) + otherGroups)
+            .flatMap { it.select("img.mangaread-manga-pic") }
+            .mapIndexed { idx, img -> Page(idx, imageUrl = img.absUrl("src")) }
     }
 
     private fun Elements.imgAttr(): String = when {
