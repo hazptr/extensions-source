@@ -10,10 +10,8 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
-import keiyoushi.network.get
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
-import keiyoushi.utils.asJsoup
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferencesLazy
@@ -40,11 +38,12 @@ abstract class TempleScan :
 
     override fun OkHttpClient.Builder.configureClient() = apply {
         rateLimit(1)
-        addInterceptor(ChallengeInterceptor())
     }
 
     // Cloudflare blocks requests that send Origin
     override fun Headers.Builder.configureHeaders() = removeAll("Origin")
+
+    private val pages = SitePages(baseUrl) { headers["User-Agent"]!! }
 
     override suspend fun getPopularManga(page: Int) = getSearchMangaList(page, "", OrderFilter.POPULAR)
 
@@ -115,17 +114,21 @@ abstract class TempleScan :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val slug = manga.url.substringAfterLast('/')
-        val document = client.get("$baseUrl/comic/$slug").asJsoup()
+        val document = pages.get("$baseUrl/comic/$slug")
+        val details = if (fetchDetails) parseDetails(document, slug) else manga
+        val chapterList = if (fetchChapters) parseChapters(document, slug) else chapters
+        return SMangaUpdate(details, chapterList)
+    }
 
+    private suspend fun parseDetails(document: Document, slug: String): SManga {
         val series = document.jsonLd<ComicSeriesLd> { it.isSeries }
-        val seriesData = document.mappedPayload<SeriesData>(SERIES_FIELDS)
         // The status only lives in the browse catalog; the detail page renders it without a stable hook.
         val catalogEntry = fetchCatalog().firstOrNull { it.slug == slug }
 
         val genres = series?.genre.orEmpty()
         val adult = genres.any { it.equals("+18", ignoreCase = true) }
 
-        val manga = SManga.create().apply {
+        return SManga.create().apply {
             url = "/comic/$slug"
             title = series?.name ?: catalogEntry?.title ?: slug
             thumbnail_url = series?.image ?: catalogEntry?.thumbnail
@@ -149,9 +152,12 @@ abstract class TempleScan :
                 }
             }
         }
+    }
 
+    private suspend fun parseChapters(document: Document, slug: String): List<SChapter> {
+        val seriesData = document.mappedPayload<SeriesData>(SERIES_FIELDS)
         val hideLocked = preferences.getBoolean(PREF_HIDE_LOCKED_CHAPTERS, true)
-        val chapterList = seriesData?.chapters.orEmpty()
+        return seriesData?.chapters.orEmpty()
             .filter { !hideLocked || it.price <= 0 }
             .map { chapter ->
                 SChapter.create().apply {
@@ -166,14 +172,12 @@ abstract class TempleScan :
                     date_upload = chapter.created
                 }
             }
-
-        return SMangaUpdate(manga, chapterList)
     }
 
     // =============================== Pages ================================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val data = client.get(baseUrl + chapter.url).asJsoup().mappedPayload<PagesList>(PAGE_FIELDS)
+        val data = pages.get(baseUrl + chapter.url).mappedPayload<PagesList>(PAGE_FIELDS)
             ?: return emptyList()
         return data.images.mapIndexed { idx, url ->
             Page(idx, imageUrl = url)
@@ -193,8 +197,7 @@ abstract class TempleScan :
 
     // ============================= Utilities ==============================
 
-    private suspend fun fetchCatalog(): List<BrowseSeries> = client.get("$baseUrl/comics")
-        .asJsoup()
+    private suspend fun fetchCatalog(): List<BrowseSeries> = pages.get("$baseUrl/comics")
         .mappedPayload<List<BrowseSeries>>(CATALOG_FIELDS, isList = true)
         .orEmpty()
 
