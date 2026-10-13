@@ -19,6 +19,7 @@ const val CHAPTER_LIST_DEDUPLICATED_MEMO = "chapterListDeduplicated"
 const val CHAPTER_LIST_BLACKLIST_MEMO = "chapterListBlacklist"
 const val CHAPTER_LIST_COMPLETE_MEMO = "chapterListComplete"
 const val CHAPTER_LIST_FETCHED_AT_MEMO = "chapterListFetchedAt"
+const val CHAPTER_LIST_BY_NUMBER_MEMO = "chapterListByNumber"
 
 @Serializable
 class Term(
@@ -267,6 +268,12 @@ class ChapterList(
     val chapters: List<Chapter>,
     val complete: Boolean,
     val error: String? = null,
+    val apiMissing: Boolean = false,
+    val foundLatest: Boolean = false,
+    val page: Int = 0,
+    val hasNext: Boolean = false,
+    val total: Int = 0,
+    val byNumber: Boolean = false,
 )
 
 @Serializable

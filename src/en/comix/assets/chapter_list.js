@@ -1,6 +1,6 @@
 // Chapter list through the site's own chapters API method, newest uploads first, up to a page with a known chapter;
-// pages past a failure are left out
-(knownIds, mangaId, chapterPath, maxPages, pass, reject) => {
+// pages past a failure are left out. With walk off, only the page the site loads itself (firstPage) is read.
+(knownIds, mangaId, chapterPath, firstPage, maxPages, walk, pass, reject) => {
     const known = new Set(knownIds);
     const chapters = [];
     const isChapter = (item) => item &&
@@ -11,18 +11,29 @@
     const isRoute = (route) => typeof route === "function" &&
         /^\(?[\w$]+\)?=>`\/manga\/\$\{[\w$]+\}\/chapters`$/.test(String(route));
     const PAGE_TIMEOUT_MS = 25000;
-    let page = 1;
-    // The site's own first load is by chapter number, so it is skipped and the list read again by upload date
-    let siteLoaded = false;
-    let expecting = false;
+    let page = firstPage;
+    // The site's own first load is by chapter number, so a walk skips it and starts again by upload date
+    let siteLoaded = !walk;
+    let expecting = !walk;
     // Numbers in the page our own call returned (the site's mapped copy), so a page the site loads itself isn't taken for it
     let returnedNumbers = null;
     let done = false;
+    let lastMeta = null;
+    let foundLatest = false;
     let chaptersApi = null;
 
-    const finish = (complete, error) => {
+    const finish = (complete, error, apiMissing = false) => {
         done = true;
-        pass(JSON.stringify({ chapters, complete, error }));
+        pass(JSON.stringify({
+            chapters,
+            complete,
+            error,
+            apiMissing,
+            foundLatest,
+            page: lastMeta ? lastMeta.page : 0,
+            hasNext: !!(lastMeta && lastMeta.hasNext),
+            total: lastMeta ? lastMeta.total : 0,
+        }));
     };
 
     const matchChaptersApi = (exports) => {
@@ -62,7 +73,7 @@
         try {
             chaptersApi = chaptersApi || await findChaptersApi();
             if (!chaptersApi) {
-                finish(false, "Could not find the site's chapters API");
+                finish(false, "Could not find the site's chapters API", true);
                 return;
             }
             expecting = true;
@@ -108,12 +119,18 @@
             return;
         }
         if (!expecting || meta.page !== page) return;
-        if (!(returnedNumbers && returnedNumbers.some((returned) => returned.count === items.length &&
+        if (walk && !(returnedNumbers && returnedNumbers.some((returned) => returned.count === items.length &&
             items.every((item) => returned.values.has(item.id))))) return;
         expecting = false;
         returnedNumbers = null;
         chapters.push(...items);
+        lastMeta = meta;
         if (items.some((item) => known.has(item.id))) {
+            foundLatest = true;
+            finish(true);
+            return;
+        }
+        if (!walk) {
             finish(true);
             return;
         }

@@ -46,6 +46,7 @@ import org.jsoup.nodes.Document
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -461,11 +462,13 @@ abstract class Comix :
             listMemo[CHAPTER_LIST_BLACKLIST_MEMO]?.string == blacklistSignature &&
             listMemo[CHAPTER_LIST_COMPLETE_MEMO]?.booleanOrNull != false
         val knownIds = if (fetchUntilKnown) chapters.mapNotNull { it.chapterId() } else emptyList()
+        // A list read by chapter number can miss backfilled uploads, so the next read by upload date goes all the way
+        val knownIdsByDate = knownIds.takeUnless { listMemo[CHAPTER_LIST_BY_NUMBER_MEMO]?.booleanOrNull == true }.orEmpty()
 
         val detail = if (fetchDetails || fetchUntilKnown) getDocument().mangaDetail() else null
         val updatedManga = detail?.takeIf { fetchDetails }?.let(::parseMangaDetails) ?: manga
         // Skip the chapter list when the site's last chapter upload is older than the last full read of it
-        val unchanged = fetchUntilKnown && run {
+        val unchanged = fetchUntilKnown && knownIdsByDate.isNotEmpty() && run {
             val fetchedAt = listMemo[CHAPTER_LIST_FETCHED_AT_MEMO]?.long ?: return@run false
             val uploadedBy = detail?.chapterUpdatedAtFormatted?.let { parseRelativeDate(it, latest = true) } ?: 0L
             uploadedBy in 1..fetchedAt
@@ -477,7 +480,7 @@ abstract class Comix :
             }.toMap()
             val mangaSlug = manga.url.removePrefix("/")
             val fetchStartedAt = System.currentTimeMillis()
-            val chapterList = getWebViewChapterList(manga, getDocument(), knownIds)
+            val chapterList = getWebViewChapterList(manga, getDocument(), knownIdsByDate, knownIds)
             if (!chapterList.complete && chapters.isEmpty()) {
                 throw Exception(chapterList.error ?: "Chapter list is incomplete")
             }
@@ -489,11 +492,14 @@ abstract class Comix :
             selectChapters(candidates, deduplicateChapters, scanlatorBlacklist).also { selected ->
                 selected.firstOrNull()?.apply {
                     memo = buildJsonObject {
-                        memo.forEach { (key, value) -> if (key != CHAPTER_LIST_FETCHED_AT_MEMO) put(key, value) }
+                        memo.forEach { (key, value) ->
+                            if (key != CHAPTER_LIST_FETCHED_AT_MEMO && key != CHAPTER_LIST_BY_NUMBER_MEMO) put(key, value)
+                        }
                         put(CHAPTER_LIST_DEDUPLICATED_MEMO, deduplicateChapters)
                         put(CHAPTER_LIST_BLACKLIST_MEMO, blacklistSignature)
                         put(CHAPTER_LIST_COMPLETE_MEMO, chapterList.complete)
                         if (chapterList.complete) put(CHAPTER_LIST_FETCHED_AT_MEMO, fetchStartedAt)
+                        if (chapterList.byNumber) put(CHAPTER_LIST_BY_NUMBER_MEMO, true)
                     }
                 }
             }
@@ -545,13 +551,47 @@ abstract class Comix :
     private suspend fun getWebViewChapterList(
         manga: SManga,
         document: Document,
+        knownIdsByDate: List<Int>,
         knownIds: List<Int>,
     ): ChapterList {
         val mangaId = manga.url.removePrefix("/").substringBefore('-')
-        val payload = runInWebView(document, { it.isChapterListRequest() }) { passPayloadName, rejectName ->
+        val first = readChapterPages(document, mangaId, knownIdsByDate, firstPage = 1, walk = true)
+        if (!first.apiMissing) return first
+
+        // Without the site's chapters API, open each page like a link to it (by chapter number, as the site loads it)
+        val chapters = mutableListOf<Chapter>()
+        var page = 1
+        var last: ChapterList
+        do {
+            last = try {
+                readChapterPages(document, mangaId, knownIds, firstPage = page, walk = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return ChapterList(chapters, complete = false, error = e.message, byNumber = true)
+            }
+            chapters += last.chapters
+            page++
+        } while (last.hasNext && !last.foundLatest && page <= MAX_CHAPTER_PAGES)
+        val count = chapters.distinctBy { it.id }.size
+        val complete = last.foundLatest || count == last.total
+        return ChapterList(chapters, complete, error = "Got $count of ${last.total} chapters".takeUnless { complete }, byNumber = true)
+    }
+
+    private suspend fun readChapterPages(
+        document: Document,
+        mangaId: String,
+        knownIds: List<Int>,
+        firstPage: Int,
+        walk: Boolean,
+    ): ChapterList {
+        val pageUrl = document.location().toHttpUrl().newBuilder().apply {
+            if (firstPage > 1) setQueryParameter("page", firstPage.toString())
+        }.build().toString()
+        val payload = runInWebView(document, { it.isChapterListRequest() }, baseUrl = pageUrl) { passPayloadName, rejectName ->
             "(${asset("capture_items.js")})((${asset("chapter_list.js")})(" +
                 "${knownIds.joinToString(",", "[", "]")}, ${JSONObject.quote(mangaId)}, ${JSONObject.quote("/title/$mangaId-")}, " +
-                "$MAX_CHAPTER_PAGES, window.$passPayloadName, window.$rejectName));"
+                "$firstPage, $MAX_CHAPTER_PAGES, $walk, window.$passPayloadName, window.$rejectName));"
         }
         return payload.parseAs<ChapterList>()
     }
@@ -661,6 +701,7 @@ abstract class Comix :
         document: Document,
         isDataRequest: ((HttpUrl) -> Boolean)? = null,
         buildScript: ((passPayloadName: String) -> String)? = null,
+        baseUrl: String = document.location(),
         pageScript: (passPayloadName: String, rejectName: String) -> String,
     ): String {
         val waitSeconds = if (isDataRequest != null) DATA_REQUEST_WAIT_SECONDS else WEBVIEW_TIMEOUT_SECONDS
@@ -733,7 +774,7 @@ abstract class Comix :
             val html = document.clone().apply {
                 head().prependElement("script").append(bootstrapScript)
             }.outerHtml()
-            loadData(document.location(), html)
+            loadData(baseUrl, html)
         }
     }
 
