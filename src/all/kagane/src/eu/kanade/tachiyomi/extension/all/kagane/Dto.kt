@@ -2,11 +2,12 @@ package eu.kanade.tachiyomi.extension.all.kagane
 
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import keiyoushi.utils.tryParse
+import keiyoushi.utils.parseAs
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import org.jsoup.Jsoup
-import java.text.SimpleDateFormat
 import java.util.Locale
 
 @Serializable
@@ -119,8 +120,6 @@ class DetailsDto(
     val tags: List<Tag> = emptyList(),
     @SerialName("series_alternate_titles")
     val seriesAlternateTitles: List<AlternateTitle> = emptyList(),
-    @SerialName("series_books")
-    val seriesBooks: List<ChapterDto.Book> = emptyList(),
     @SerialName("edition_info")
     val editionInfo: String? = null,
     @SerialName("tracker_id")
@@ -245,38 +244,41 @@ class DetailsDto(
 }
 
 @Serializable
-class ChapterDto(
-    @SerialName("series_books")
-    val seriesBooks: List<Book>,
+class BookIndexDto(
+    private val fields: List<String>,
+    private val groups: List<Group>,
+    private val books: List<JsonArray>,
 ) {
+    fun toSChapters(seriesId: String, useSourceChapterNumber: Boolean, chapterTitleMode: String): List<SChapter> = books.map { row ->
+        JsonObject(fields.zip(row).toMap()).parseAs<Book>()
+            .toSChapter(seriesId, groups, useSourceChapterNumber, chapterTitleMode)
+    }
+
     @Serializable
     class Book(
         @SerialName("book_id")
         val id: String,
-        @SerialName("series_id")
-        val seriesId: String? = null,
         val title: String,
-        @SerialName("created_at")
-        val createdAt: String?,
-        @SerialName("page_count")
-        val pagesCount: Int,
+        @SerialName("released_at")
+        val releasedAt: Long?,
         @SerialName("sort_no")
         val number: Float,
         @SerialName("chapter_no")
         val chapterNo: String?,
         @SerialName("volume_no")
         val volumeNo: String?,
-        val groups: List<Group> = emptyList(),
+        @SerialName("group_ix")
+        val groupIndexes: List<Int> = emptyList(),
     ) {
-        fun toSChapter(actualSeriesId: String, useSourceChapterNumber: Boolean = false, chapterTitleMode: String = "optional"): SChapter = SChapter.create().apply {
-            url = "/series/$actualSeriesId/reader/$id"
+        fun toSChapter(seriesId: String, groups: List<Group>, useSourceChapterNumber: Boolean, chapterTitleMode: String): SChapter = SChapter.create().apply {
+            url = "/series/$seriesId/reader/$id"
             name = buildChapterName(chapterTitleMode)
-            date_upload = dateFormat.tryParse(createdAt)
+            date_upload = releasedAt?.let { it * 1000 } ?: 0L
             if (useSourceChapterNumber) {
                 chapter_number = number
             }
             scanlator = buildString {
-                append(groups.joinToString(", ") { it.title })
+                append(groupIndexes.mapNotNull { groups.getOrNull(it)?.title }.joinToString())
 
                 // Extract group tags in chapter title
                 CHAPTER_GROUP_REGEX.matchEntire(METADATA_REGEX.replace(title.trim(), ""))?.let { match ->
@@ -325,9 +327,6 @@ class ChapterDto(
     class Group(
         val title: String,
     )
-    companion object {
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.ENGLISH)
-    }
 }
 
 @Serializable

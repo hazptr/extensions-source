@@ -44,9 +44,6 @@ abstract class Kagane :
     KeiSource(),
     ConfigurableSource {
 
-    private val kaganeLangs: List<String>
-        get() = if (lang == "zh") listOf("zh-Hans", "zh-Hant") else listOf(lang)
-
     private val domain get() = baseUrl.removePrefix("https://")
     private val apiUrl get() = "https://$domain/api/v2"
 
@@ -214,7 +211,7 @@ abstract class Kagane :
 
             // Add languages specific to this source instance
             putJsonArray("content_lang") {
-                kaganeLangs.forEach { add(it) }
+                add(lang)
             }
         }.toJsonRequestBody()
 
@@ -262,8 +259,10 @@ abstract class Kagane :
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
-    ): SMangaUpdate {
+    ): SMangaUpdate = coroutineScope {
         val seriesId = manga.url
+        val books = if (fetchChapters) async { getBookIndex(seriesId) } else null
+        // Details are always needed: format decides chapter numbering
         val dto = getMangaById(seriesId)
 
         val updatedManga = parseMangaDetails(dto).apply {
@@ -273,12 +272,19 @@ abstract class Kagane :
                 }
             }
         }
-        val updatedChapters = parseChapterList(dto, seriesId)
+        val updatedChapters = books?.await()?.let { parseChapterList(dto, it, seriesId) } ?: chapters
 
-        return SMangaUpdate(updatedManga, updatedChapters)
+        SMangaUpdate(updatedManga, updatedChapters)
     }
 
-    private fun parseChapterList(details: DetailsDto, seriesId: String): List<SChapter> {
+    private suspend fun getBookIndex(seriesId: String): BookIndexDto {
+        val url = "$apiUrl/series/$seriesId/books/index".toHttpUrl().newBuilder()
+            .addQueryParameter("fields", "List")
+            .build()
+        return client.get(url).parseAs<BookIndexDto>()
+    }
+
+    private fun parseChapterList(details: DetailsDto, books: BookIndexDto, seriesId: String): List<SChapter> {
         val useSourceChapterNumber = details.format in setOf(
             "Dark Horse Comics",
             "Flame Comics",
@@ -286,9 +292,7 @@ abstract class Kagane :
             "Square Enix Manga",
         )
 
-        return details.seriesBooks.map { book ->
-            book.toSChapter(seriesId, useSourceChapterNumber, chapterTitleMode)
-        }.reversed()
+        return books.toSChapters(seriesId, useSourceChapterNumber, chapterTitleMode).reversed()
     }
 
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl${chapter.url}"
