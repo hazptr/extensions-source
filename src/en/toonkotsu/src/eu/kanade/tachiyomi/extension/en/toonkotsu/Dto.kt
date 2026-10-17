@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.extension.en.toonkotsu
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Serializable
 class BrowseDto(
@@ -57,23 +58,43 @@ class SeriesResponse(
 class ChapterDto(
     val id: Long,
     val n: Double?,
+    private val vol: String? = null,
     private val label: String,
     private val at: Long? = null,
     private val group: GroupDto? = null,
     val partial: Boolean = false,
+    private val src: String? = null,
+    @Transient val parentId: Long? = null,
     private val alts: List<AltChapterDto> = emptyList(),
 ) {
     val isOfficial get() = group?.slug == "official"
 
+    val numericVolume get() = vol?.trim()?.toDoubleOrNull()
+
+    val chapterKey get() = n ?: parentId ?: id
+
+    fun row(byVolume: Boolean, byGroup: Boolean = true) = listOf(
+        chapterKey,
+        (numericVolume ?: vol?.trim()?.lowercase().orEmpty()).takeIf { byVolume },
+        (group?.slug ?: group?.name).takeIf { byGroup },
+    )
+
     fun withAlts() = listOf(this) + alts.sortedBy { it.id }.map {
-        ChapterDto(it.id, n, it.label ?: label, it.at ?: at, it.group, it.partial)
+        ChapterDto(it.id, n, vol, it.label ?: label, it.at ?: at, it.group, it.partial, it.src, id)
     }
 
-    fun toSChapter(mangaUrl: String) = SChapter.create().apply {
+    fun isFromSource(key: String) = key.equals(src, ignoreCase = true)
+
+    fun isFromGroup(name: String) = name.equals(group?.name, ignoreCase = true)
+
+    fun toSChapter(mangaUrl: String, withSourceCode: Boolean) = SChapter.create().apply {
         url = "$mangaUrl/$id"
         name = label
+        // The site's own chapter number; names can count per season or per arc, or have none
+        n?.let { chapter_number = it.toFloat() }
         date_upload = at ?: 0L
-        scanlator = group?.name
+        // The site has no names for its sources, only codes
+        scanlator = group?.name?.let { if (withSourceCode && src != null) "$it ($src)" else it }
     }
 }
 
@@ -84,6 +105,7 @@ class AltChapterDto(
     val at: Long? = null,
     val group: GroupDto? = null,
     val partial: Boolean = false,
+    val src: String? = null,
 )
 
 @Serializable

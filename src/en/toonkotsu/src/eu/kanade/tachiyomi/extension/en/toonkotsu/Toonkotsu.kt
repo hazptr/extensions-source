@@ -1,6 +1,8 @@
 package eu.kanade.tachiyomi.extension.en.toonkotsu
 
 import android.util.Base64
+import androidx.preference.EditTextPreference
+import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.network.HttpException
@@ -40,7 +42,13 @@ abstract class Toonkotsu :
     KeiSource(),
     ConfigurableSource {
 
-    private val preferences by getPreferencesLazy()
+    private val preferences by getPreferencesLazy {
+        if (contains(PREF_DEDUPLICATE_CHAPTERS)) {
+            val editor = edit().remove(PREF_DEDUPLICATE_CHAPTERS)
+            if (getBoolean(PREF_DEDUPLICATE_CHAPTERS, false)) editor.putString(PREF_CHAPTER_LIST, ONE_PER_CHAPTER)
+            editor.apply()
+        }
+    }
 
     override val supportsFilterFetching = true
 
@@ -99,17 +107,42 @@ abstract class Toonkotsu :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val data = fetchSeries(manga)
-        val uploads = data.chapters.flatMap { it.withAlts() }
-        val chapterList = if (preferences.getBoolean(PREF_DEDUPLICATE_CHAPTERS, false)) deduplicate(uploads) else uploads
+        val allUploads = data.chapters.flatMap { it.withAlts() }
+        // The site splits rows by volume when 3+ chapter numbers span several volumes
+        val byVolume = allUploads.filter { it.n != null && it.numericVolume != null }
+            .groupBy({ it.n }, { it.numericVolume })
+            .count { (_, volumes) -> volumes.distinct().size > 1 } >= 3
+        val hiddenGroups = commaList(PREF_HIDDEN_GROUPS)
+        val uploads = allUploads.filterNot { upload -> hiddenGroups.any { upload.isFromSource(it) || upload.isFromGroup(it) } }
+        val preferredSources = commaList(PREF_PREFERRED_SOURCES)
+        val preferredGroups = commaList(PREF_PREFERRED_GROUPS)
+        val sourceRank = { upload: ChapterDto -> preferredSources.rankOf(upload::isFromSource) }
+        val groupRank = { upload: ChapterDto -> preferredGroups.rankOf(upload::isFromGroup) }
+        // One upload per row, in the site's order; preferred sources sit where the site's own preferred source does
+        val picks = uploads.sortedWith(compareBy({ it.partial }, sourceRank, { it.parentId != null }))
+            .distinctBy { it.row(byVolume) }
+            .toSet()
+        val chapterList = when (preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP)) {
+            ONE_PER_GROUP -> {
+                val complete = picks.filterNot { it.partial }.mapTo(HashSet()) { it.row(byVolume, byGroup = false) }
+                // The site hides a partial-only row when another group has the full chapter
+                uploads.filter { it in picks && (!it.partial || it.row(byVolume, byGroup = false) !in complete) }
+            }
+            ONE_PER_CHAPTER ->
+                uploads.filter { it in picks }
+                    .groupBy { it.chapterKey }
+                    .map { (_, same) -> same.sortedWith(compareBy({ it.partial }, groupRank, { !it.isOfficial })).first() }
+            else -> uploads
+        }
         return SMangaUpdate(
             data.series.toSManga(baseUrl),
-            chapterList.map { it.toSChapter(manga.url) },
+            chapterList.map { it.toSChapter(manga.url, withSourceCode = it !in picks) },
         )
     }
 
-    private fun deduplicate(uploads: List<ChapterDto>) = uploads
-        .groupBy { it.n ?: it.id }
-        .map { (_, same) -> same.sortedWith(compareBy({ it.partial }, { !it.isOfficial })).first() }
+    private fun commaList(key: String) = preferences.getString(key, null).orEmpty().split(',').map(String::trim).filter(String::isNotEmpty)
+
+    private fun List<String>.rankOf(matches: (String) -> Boolean) = indexOfFirst(matches).takeIf { it >= 0 } ?: size
 
     override suspend fun fetchRelatedMangaList(manga: SManga): List<SManga> = fetchSeries(manga).recs.map { it.toSManga(baseUrl) }
 
@@ -196,17 +229,57 @@ abstract class Toonkotsu :
             setDefaultValue(false)
         }.let(screen::addPreference)
 
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_DEDUPLICATE_CHAPTERS
-            title = "Deduplicate chapters"
-            summary = "Show one upload per chapter, preferring complete and Official uploads, then the site's order"
-            setDefaultValue(false)
+        val preferredGroups = EditTextPreference(screen.context).apply {
+            key = PREF_PREFERRED_GROUPS
+            title = "Preferred groups"
+            summary = "Group names, comma-separated. One per chapter shows the first listed group that has a complete upload"
+            dialogTitle = "Preferred groups"
+            setDefaultValue("")
+            setEnabled(preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP) == ONE_PER_CHAPTER)
+        }
+
+        ListPreference(screen.context).apply {
+            key = PREF_CHAPTER_LIST
+            title = "Chapter list"
+            entries = arrayOf("All uploads", "One per group, like the site's list", "One per chapter")
+            entryValues = arrayOf(ALL_UPLOADS, ONE_PER_GROUP, ONE_PER_CHAPTER)
+            summary = "%s"
+            setDefaultValue(ONE_PER_GROUP)
+            setOnPreferenceChangeListener { _, newValue ->
+                preferredGroups.setEnabled(newValue == ONE_PER_CHAPTER)
+                true
+            }
+        }.let(screen::addPreference)
+
+        screen.addPreference(preferredGroups)
+
+        EditTextPreference(screen.context).apply {
+            key = PREF_HIDDEN_GROUPS
+            title = "Hidden groups and sources"
+            summary = "Group names or source codes, comma-separated. Their uploads are left out of the chapter list"
+            dialogTitle = "Hidden groups and sources"
+            setDefaultValue("")
+        }.let(screen::addPreference)
+
+        EditTextPreference(screen.context).apply {
+            key = PREF_PREFERRED_SOURCES
+            title = "Preferred sources"
+            summary = "Source codes, comma-separated, as shown in parentheses in All uploads. Picks which copy of a chapter a group shows"
+            dialogTitle = "Preferred sources"
+            setDefaultValue("")
         }.let(screen::addPreference)
     }
 
     companion object {
         private const val PREF_ADULT = "show_hentai"
         private const val PREF_DEDUPLICATE_CHAPTERS = "pref_deduplicate_chapters"
+        private const val PREF_CHAPTER_LIST = "pref_chapter_list"
+        private const val PREF_PREFERRED_SOURCES = "pref_preferred_sources"
+        private const val PREF_PREFERRED_GROUPS = "pref_preferred_groups"
+        private const val PREF_HIDDEN_GROUPS = "pref_hidden_groups"
+        private const val ALL_UPLOADS = "all"
+        private const val ONE_PER_GROUP = "group"
+        private const val ONE_PER_CHAPTER = "chapter"
         private const val TURNSTILE_SITE_KEY = "0x4AAAAAAFQpQeG5qpmLQtf9"
         private val HID_REGEX = Regex("""^[a-z][0-9a-z]{4}(?=-|$)""")
     }
