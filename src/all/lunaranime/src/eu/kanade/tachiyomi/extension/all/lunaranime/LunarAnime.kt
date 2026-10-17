@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.extension.all.lunaranime
 
+import android.webkit.WebResourceResponse
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -10,17 +11,20 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
-import keiyoushi.network.post
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
-import keiyoushi.utils.asJsoup
+import keiyoushi.utils.getTurnstileToken
 import keiyoushi.utils.parseAs
-import keiyoushi.utils.toJsonRequestBody
+import keiyoushi.utils.runWebView
+import keiyoushi.utils.toJsonString
 import kotlinx.serialization.json.JsonElement
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.seconds
 
 @Source
 abstract class LunarAnime : KeiSource() {
@@ -34,6 +38,9 @@ abstract class LunarAnime : KeiSource() {
     private val cdnurlHost by lazy { CDN_URL.toHttpUrl().host }
 
     private val serenity = LunarSerenity(API_URL)
+
+    // Per-series expiry of the site reader's clearance
+    private val clearances = ConcurrentHashMap<String, Long>()
 
     override fun OkHttpClient.Builder.configureClient() = this
         .addInterceptor(serenity.interceptor())
@@ -50,8 +57,6 @@ abstract class LunarAnime : KeiSource() {
             }
         }
         .rateLimit(2) { it.host == apiurlHost || it.host == cdnurlHost }
-
-    private val crypto by lazy { LunarDecryptor(serenity) }
 
     // ============================== Popular ===============================
 
@@ -187,41 +192,89 @@ abstract class LunarAnime : KeiSource() {
 
     // =============================== Pages ================================
 
-    private suspend fun viewChapter(slug: String, number: String, lang: String) {
-        client.get("$API_URL/api/manga/rating/status/$slug/$number", ensureSuccess = false).close()
-
-        val body = ViewRequestBody(slug, number, lang).toJsonRequestBody()
-        client.post("$API_URL/api/manga/chapter/view", body, ensureSuccess = false).close()
-    }
-
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val chapterUrl = (baseUrl + chapter.url).toHttpUrl()
-        val language = chapterUrl.queryParameter("lang") ?: "en"
-        val (slug, chapterNumber) = chapterUrl.pathSegments.takeLast(2)
+        val slug = chapterUrl.pathSegments[1]
 
-        val seeds = crypto.extractSeeds(client.get(chapterUrl).asJsoup())
-        val minted = crypto.mint(seeds, slug, chapterNumber)
-
-        // Required requests or fake images are returned
-        viewChapter(slug, chapterNumber, language)
-
-        val url = API_URL.toHttpUrl().newBuilder()
-            .addPathSegments("api/manga/r")
-            .addPathSegment(minted.token)
-            .apply { if (language != "en") addQueryParameter("language", language) }
-            .build()
-
-        val sessionData = client.get(url).parseAs<LunarPageListResponse>()
-            .data?.sessionData
-            ?: error("session_data is empty")
-
-        val images = crypto.unpack(sessionData, seeds, minted.nonce)
-            .parseAs<LunarPageListDecrypted>().data.images
+        val clearedUntil = clearances[slug]?.takeIf { it > System.currentTimeMillis() }
+        val images = clearedUntil?.let { readReaderPages(chapterUrl, slug, clearedUntil = it) }
+            ?: readReaderPages(chapterUrl, slug, turnstileToken = fetchTurnstileToken(chapterUrl.toString()))
+            ?: throw Exception("Site only served placeholder pages")
 
         return images.mapIndexed { index, imageUrl ->
-            Page(index, chapter.url, imageUrl)
+            Page(index, url = chapter.url, imageUrl = API_URL.toHttpUrl().resolve(imageUrl)!!.toString())
         }
     }
+
+    private suspend fun fetchTurnstileToken(chapterUrl: String): String? {
+        val captcha = client.get("$API_URL/api/captcha/config").parseAs<LunarCaptchaConfig>()
+        return if (captcha.mangaTurnstile) getTurnstileToken(chapterUrl, captcha.mangaTurnstileSiteKey) else null
+    }
+
+    // Runs the site's reader, which only hands real page urls to its own client. Null for placeholder pages.
+    private suspend fun readReaderPages(
+        chapterUrl: HttpUrl,
+        slug: String,
+        turnstileToken: String? = null,
+        clearedUntil: Long? = null,
+    ): List<String>? {
+        val siteOrigin = baseUrl.toHttpUrl().run { "$scheme://$host" }
+        val siteHost = baseUrl.toHttpUrl().host
+        val language = chapterUrl.queryParameter("lang") ?: "en"
+        val bridgeName = randomName()
+
+        return runWebView(timeout = 60.seconds) {
+            blockImages = true
+
+            interceptRequest { request ->
+                val url = request.url.toString().toHttpUrlOrNull() ?: return@interceptRequest null
+                when {
+                    url.host == TURNSTILE_HOST && url.encodedPath == TURNSTILE_SCRIPT_PATH && turnstileToken != null -> {
+                        val script = "(${asset("turnstile.js")})(${turnstileToken.toJsonString()})"
+                        WebResourceResponse("application/javascript", "utf-8", script.byteInputStream())
+                    }
+                    url.host == siteHost || url.host.endsWith(".$siteHost") || url.host == TURNSTILE_HOST -> null
+                    else -> WebResourceResponse("text/plain", "utf-8", ByteArray(0).inputStream())
+                }
+            }
+
+            webMessageBridge(bridgeName, setOf(siteOrigin)) { message ->
+                val payload = message.parseAs<LunarReaderPayload>()
+                val data = payload.data
+                when {
+                    payload.locked -> reject(Exception("Chapter is locked on the site"))
+                    // Placeholder rounds leave out the slug
+                    data == null || (payload.slug ?: slug) != slug || (data.language ?: language) != language -> Unit
+                    data.isComingSoon -> resolve(emptyList())
+                    data.images.isNotEmpty() && data.images.all { PLACEHOLDER_PATH in it } -> {
+                        clearances.remove(slug)
+                        resolve(null)
+                    }
+                    payload.cacheStatus == "revalidate" -> resolve(data.images)
+                    else -> {
+                        val now = System.currentTimeMillis()
+                        val ttl = payload.cacheTtl?.times(1000)?.coerceAtMost(MAX_CLEARANCE_MS) ?: MAX_CLEARANCE_MS
+                        clearances.values.removeIf { it < now }
+                        clearances[slug] = now + ttl - CLEARANCE_MARGIN_MS
+                        resolve(data.images)
+                    }
+                }
+            }
+
+            if (clearedUntil != null) {
+                val key = "$CLEARANCE_KEY$slug".toJsonString()
+                injectAtDocumentStart("sessionStorage.setItem($key, '$clearedUntil')", setOf(siteOrigin))
+            }
+            injectAtDocumentStart("(${asset("reader_pages.js")})(page => window.$bridgeName.postMessage(page))", setOf(siteOrigin))
+            loadUrl(chapterUrl.toString())
+        }
+    }
+
+    private fun randomName() = (1..(10..20).random())
+        .map { (('a'..'z') + ('A'..'Z')).random() }
+        .joinToString("")
+
+    private fun asset(name: String) = javaClass.getResource("/assets/$name")!!.readText()
 
     override fun imageRequest(page: Page): Request {
         val imageHeaders = headersBuilder()
@@ -256,5 +309,11 @@ abstract class LunarAnime : KeiSource() {
     companion object {
         private const val API_URL = "https://api.lunarx.to"
         private const val CDN_URL = "https://vault.lunarx.to"
+        private const val TURNSTILE_HOST = "challenges.cloudflare.com"
+        private const val TURNSTILE_SCRIPT_PATH = "/turnstile/v0/api.js"
+        private const val PLACEHOLDER_PATH = "/api/cdn/p/"
+        private const val CLEARANCE_KEY = "lunar_ts_clearance:v3:"
+        private const val MAX_CLEARANCE_MS = 1_500_000L
+        private const val CLEARANCE_MARGIN_MS = 15_000L
     }
 }

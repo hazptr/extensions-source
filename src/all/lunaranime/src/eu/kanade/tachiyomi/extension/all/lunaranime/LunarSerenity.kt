@@ -6,7 +6,6 @@ import okhttp3.Interceptor
 import java.math.BigInteger
 import java.security.KeyPair
 import java.security.KeyPairGenerator
-import java.security.MessageDigest
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
@@ -37,16 +36,6 @@ class LunarSerenity(private val apiUrl: String) {
     private val coordinateX get() = publicPoint.affineX.toFixedWidth()
 
     private val coordinateY get() = publicPoint.affineY.toFixedWidth()
-
-    /**
-     * RFC 7638 thumbprint of the public JWK, used by the site as extra key material when
-     * decrypting a chapter's session data.
-     */
-    val thumbprint: String
-        get() {
-            val jwk = """{"crv":"P-256","kty":"EC","x":"$coordinateX","y":"$coordinateY"}"""
-            return sha256(jwk.toByteArray()).base64Url()
-        }
 
     fun proof(method: String, url: HttpUrl): String {
         val header = """{"alg":"ES256","typ":"dpop+jwt","jwk":{"kty":"EC","crv":"P-256","x":"$coordinateX","y":"$coordinateY"}}"""
@@ -83,8 +72,6 @@ class LunarSerenity(private val apiUrl: String) {
     private fun okhttp3.Request.withProof() = newBuilder()
         .header(PROOF_HEADER, proof(method, url))
         .build()
-
-    private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
 
     private fun ByteArray.base64Url(): String = Base64.encodeToString(this, Base64.NO_WRAP or Base64.NO_PADDING or Base64.URL_SAFE)
 
