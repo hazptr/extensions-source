@@ -150,7 +150,6 @@ class Manga(
     private val tags: List<TagCategory> = emptyList(),
     private val description: String? = null,
     private val photo: String? = null,
-    private val hiatus: String? = null,
     private val status: String? = null,
     @SerialName("source_url")
     private val sourceUrl: String? = null,
@@ -231,10 +230,11 @@ class Manga(
         }.joinToString()
         status = when {
             "One Shot" in this@Manga.genres -> SManga.COMPLETED
-            this@Manga.hiatus == "Yes" -> SManga.ON_HIATUS
             else -> when (this@Manga.status?.lowercase()) {
                 "ongoing" -> SManga.ONGOING
                 "completed" -> SManga.COMPLETED
+                "hiatus" -> SManga.ON_HIATUS
+                "cancelled" -> SManga.CANCELLED
                 else -> SManga.UNKNOWN
             }
         }

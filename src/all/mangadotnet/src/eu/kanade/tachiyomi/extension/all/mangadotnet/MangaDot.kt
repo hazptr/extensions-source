@@ -821,8 +821,8 @@ abstract class MangaDot :
         val browseStatusPref = ListPreference(screen.context).apply {
             key = BROWSE_STATUS_PREF
             title = "Status Filter"
-            entries = arrayOf("Any Status", "Ongoing", "Completed", "Hiatus")
-            entryValues = arrayOf("", "Ongoing", "Completed", "Hiatus")
+            entries = arrayOf("Any Status", "Ongoing", "Completed", "Hiatus", "Cancelled")
+            entryValues = arrayOf("", "Ongoing", "Completed", "Hiatus", "Cancelled")
             setDefaultValue("")
             summary = "Applies to Popular & Latest."
         }
