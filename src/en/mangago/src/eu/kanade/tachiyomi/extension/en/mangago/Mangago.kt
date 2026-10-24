@@ -74,7 +74,7 @@ abstract class Mangago :
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.get("$baseUrl/genre/all/$page/?f=1&o=1&sortby=update_date&e=")
+        val response = client.get("$baseUrl/list/latest/all/$page/")
         return parseMangasPage(response)
     }
 
