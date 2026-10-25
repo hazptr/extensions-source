@@ -76,6 +76,8 @@
         return match ? { hid: match[1], id: Number(match[2]), number: parseFloat(match[3]) } : null;
     };
     const textOf = (el) => (el && el.textContent ? el.textContent : "").replace(/\s+/g, " ").trim();
+    // The signed-in hero "Resume Ch. N" link also points at a chapter
+    const isChapterRow = (anchor) => !!anchor.closest("li");
 
     const OPTIONS = Object.assign(
         { timeoutMs: 45000, settleMs: 5000, pollMs: 100, maxRounds: 40, stopAtIds: [] },
@@ -125,7 +127,7 @@
         let lastAnchorIdx = -1;
         for (const el of inOrder) {
             const href = el.getAttribute("href");
-            if (href && parseChapterPath(pathOf(href))) lastAnchorIdx = orderOf.get(el);
+            if (href && parseChapterPath(pathOf(href)) && isChapterRow(el)) lastAnchorIdx = orderOf.get(el);
         }
         const currents = inOrder.filter((el) => (orderOf.get(el) ?? -1) > lastAnchorIdx &&
             (el.getAttribute("aria-current") === "page" || /\bis-active\b/.test(String(el.className || ""))) &&
@@ -193,7 +195,7 @@
             for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
                 const path = pathOf(anchor.getAttribute("href") || "");
                 const chapter = parseChapterPath(path);
-                if (!chapter) continue;
+                if (!chapter || !isChapterRow(anchor)) continue;
                 if (hid && chapter.hid !== hid) continue;
                 if (byId.has(chapter.id)) continue;
                 const row = rowRoot(anchor);
@@ -219,13 +221,13 @@
             const first = Array.from(document.querySelectorAll("a[href]"))
                 .find((a) => {
                     const c = parseChapterPath(pathOf(a.getAttribute("href") || ""));
-                    return c && (!hid || c.hid === hid);
+                    return c && (!hid || c.hid === hid) && isChapterRow(a);
                 });
             if (!first) return document.body;
             const rendered = Array.from(document.querySelectorAll("a[href]"))
                 .filter((a) => {
                     const c = parseChapterPath(pathOf(a.getAttribute("href") || ""));
-                    return c && (!hid || c.hid === hid);
+                    return c && (!hid || c.hid === hid) && isChapterRow(a);
                 }).length;
             let root = first;
             for (let depth = 0; depth < 12 && root.parentElement; depth++) {
@@ -233,7 +235,7 @@
                 const inside = Array.from(parent.querySelectorAll("a[href]"))
                     .filter((a) => {
                         const c = parseChapterPath(pathOf(a.getAttribute("href") || ""));
-                        return c && (!hid || c.hid === hid);
+                        return c && (!hid || c.hid === hid) && isChapterRow(a);
                     }).length;
                 if (inside >= rendered) root = parent;
                 else break;
