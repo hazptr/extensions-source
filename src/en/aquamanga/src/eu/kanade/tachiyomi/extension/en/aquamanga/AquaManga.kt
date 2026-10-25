@@ -7,9 +7,9 @@ import keiyoushi.annotation.Source
 abstract class AquaManga : MadaraNoAjax() {
     override val supportsPostId = false
 
-    override fun archiveSelector() = ".aqua-archive-card"
-    override val archiveUrlSelector = ".aqua-archive-card__title a"
-    override fun nextPageSelector() = "a.next"
+    override fun archiveSelector() = ".aqua-archive-card, .c-tabs-item__content"
+    override val archiveUrlSelector = ".aqua-archive-card__title a, .post-title a"
+    override fun nextPageSelector() = "a.next, div.nav-previous"
 
     override val mangaDetailsSelectorTitle = ".aqua-series-info__title"
     override val mangaDetailsSelectorThumbnail = ".aqua-series-cover__img"
