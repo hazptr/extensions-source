@@ -61,9 +61,9 @@ abstract class CatharsisWorld : KeiSource() {
     override fun Headers.Builder.configureHeaders(): Headers.Builder = add("System", "catharsis")
         .add("X-FK-Sistema", "3")
 
-    override suspend fun getPopularManga(page: Int) = searchMangas(page, "", "-n_visitas", null, emptyList())
+    override suspend fun getPopularManga(page: Int) = searchMangas(page, "", "-n_visitas", null, null, emptyList())
 
-    override suspend fun getLatestUpdates(page: Int) = searchMangas(page, "", "-fecha_ultimo_capitulo", null, emptyList())
+    override suspend fun getLatestUpdates(page: Int) = searchMangas(page, "", "-fecha_ultimo_capitulo", null, null, emptyList())
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val genres = filters.firstInstanceOrNull<GenreFilter>()?.state.orEmpty().filter { it.state }.map { it.id }
@@ -72,17 +72,19 @@ abstract class CatharsisWorld : KeiSource() {
             query = query,
             sort = filters.firstInstance<SortFilter>().value,
             status = filters.firstInstance<StatusFilter>().value,
+            letter = filters.firstInstance<LetterFilter>().value,
             genres = genres,
         )
     }
 
-    private suspend fun searchMangas(page: Int, query: String, sort: String, status: String?, genres: List<String>): MangasPage {
+    private suspend fun searchMangas(page: Int, query: String, sort: String, status: String?, letter: String?, genres: List<String>): MangasPage {
         val url = "$apiUrl/mangas".toHttpUrl().newBuilder().apply {
             addQueryParameter("page", page.toString())
             addQueryParameter("limit", PAGE_SIZE.toString())
             if (query.isNotBlank()) addQueryParameter("name", query.trim())
             if (genres.isNotEmpty()) addQueryParameter("genre", genres.joinToString("|"))
             status?.let { addQueryParameter("status", it) }
+            letter?.let { addQueryParameter("letter", it) }
             addQueryParameter("sort", sort)
         }.build()
         val result = client.get(url).parseAs<MangaListDto>()
@@ -97,6 +99,7 @@ abstract class CatharsisWorld : KeiSource() {
         buildList {
             add(SortFilter())
             add(StatusFilter())
+            add(LetterFilter())
             data?.parseAs<List<GenreDto>>()?.let { genres ->
                 add(GenreFilter(genres.map { GenreCheckBox(it.nombre, it.id) }))
             }
