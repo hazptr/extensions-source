@@ -35,7 +35,7 @@ class MangaDto(
     }
 
     fun toSMangaDetails(baseUrl: String) = toSManga(baseUrl).apply {
-        genre = (listOfNotNull(tipo) + generos.map { it.genre.nombre }).joinToString()
+        genre = (listOfNotNull(tipo?.replaceFirstChar(Char::uppercase)) + generos.map { it.genre.nombre }).joinToString()
         description = buildString {
             descripcion?.let { append(it.trim()) }
             val altNames = listOfNotNull(nombreAlt1, nombreAlt2).filter(String::isNotBlank)
@@ -48,6 +48,7 @@ class MangaDto(
             "curso" -> SManga.ONGOING
             "pausado" -> SManga.ON_HIATUS
             "terminado" -> SManga.COMPLETED
+            "abandonado" -> SManga.CANCELLED
             else -> SManga.UNKNOWN
         }
     }
