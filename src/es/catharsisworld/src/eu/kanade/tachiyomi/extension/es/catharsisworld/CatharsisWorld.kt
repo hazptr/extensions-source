@@ -1,13 +1,6 @@
 package eu.kanade.tachiyomi.extension.es.catharsisworld
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Rect
 import android.util.Base64
-import eu.kanade.tachiyomi.network.HttpException
-import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -16,37 +9,46 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.get
-import keiyoushi.network.post
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.NativeWebViewApi
 import keiyoushi.utils.firstInstance
 import keiyoushi.utils.firstInstanceOrNull
-import keiyoushi.utils.hmacSha256
 import keiyoushi.utils.parseAs
-import keiyoushi.utils.sha256
+import keiyoushi.utils.runWebView
 import keiyoushi.utils.toJsonElement
-import keiyoushi.utils.toJsonRequestBody
+import keiyoushi.utils.toJsonString
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody
+import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
-import okio.Buffer
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
-import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.Instant
+import kotlin.time.TimeSource
 
 @Source
 abstract class CatharsisWorld : KeiSource() {
@@ -54,8 +56,6 @@ abstract class CatharsisWorld : KeiSource() {
     private val apiUrl get() = "$baseUrl/api"
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::pageInterceptor)
-        .addInterceptor(::signatureInterceptor)
-        .rateLimit(50, 1.minutes, 1.seconds) { it.encodedPath.endsWith("/page-ticket") }
         .rateLimit(3, 1.seconds) { it.host == baseUrl.toHttpUrl().host }
 
     override fun Headers.Builder.configureHeaders(): Headers.Builder = add("System", "catharsis")
@@ -134,353 +134,250 @@ abstract class CatharsisWorld : KeiSource() {
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val dto = sessionMutex.withLock { openChapter(chapter.url) }
-        return dto.paginas.mapIndexed { i, page ->
+        val total = reader(chapter.url).total.await()
+        return List(total) { index ->
             val url = HttpUrl.Builder()
                 .scheme("http")
                 .host(PAGE_HOST)
                 .addPathSegments(chapter.url)
-                .addQueryParameter("page", page.index.toString())
+                .addQueryParameter("page", index.toString())
                 .build()
-            Page(i, imageUrl = url.toString())
+            Page(index, imageUrl = url.toString())
         }
     }
 
-    override fun imageRequest(page: Page): Request = super.imageRequest(page).newBuilder()
-        .addHeader("X-Catharsis-Reader", "1")
-        .build()
-
-    // Page image: a ticket per load, then the signed image
+    // Page image: the page as the site's reader drew it
     private fun pageInterceptor(chain: Interceptor.Chain): Response {
         val request = chain.request()
         if (request.url.host != PAGE_HOST) return chain.proceed(request)
         val chapterUrl = request.url.encodedPath.removePrefix("/")
-        val pageIndex = request.url.queryParameter("page")!!.toInt()
-        val ticket = try {
-            val session = runBlocking { chapterSession(chapterUrl) }
-            mintPageTicket(chain, session, pageIndex)
-                ?: mintPageTicket(chain, runBlocking { chapterSession(chapterUrl, rejected = session) }, pageIndex)
-                ?: throw HttpException(401)
-        } catch (e: IOException) {
-            throw e
-        } catch (e: Exception) {
-            throw IOException(e.message, e)
+        val index = request.url.queryParameter("page")!!.toInt()
+        val data = try {
+            // The reader outlives this call, so only the wait is cancelled with it
+            runBlocking {
+                val page = async { withTimeout(PAGE_TIMEOUT) { awaitPage(chapterUrl, index) } }
+                while (page.isActive && !chain.call().isCanceled()) delay(CANCEL_POLL)
+                page.cancel()
+                Base64.decode(page.await(), Base64.DEFAULT)
+            }
+        } catch (_: TimeoutCancellationException) {
+            throw IOException("Timed out loading page ${index + 1}")
+        } catch (e: Throwable) {
+            throw e as? IOException ?: IOException(e.message, e)
         }
-        val response = chain.proceed(request.newBuilder().url("$apiUrl/mangas/pages/${ticket.signedToken}").build())
-        if (!response.isSuccessful) return response
-
-        val body = response.body
-        val source = body.source()
-        if (!source.request(HEADER_SIZE.toLong())) return response
-        if (source.buffer.size < HEADER_SIZE) return response
-        val header = source.buffer.snapshot(HEADER_SIZE).toByteArray()
-        val decoded = header.xor(ticket.xorByte)
-        // XOR-ed with the ticket's byte unless it already starts with an image signature
-        if (isImage(header) || !isImage(decoded)) return response
-
-        val bytes = body.bytes()
-        val decodedBytes = bytes.xor(ticket.xorByte)
-        val bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
-        if (bitmap == null || ticket.scrambleKey == null || bitmap.width < 800 || bitmap.height < 800) {
-            return response.newBuilder()
-                .body(decodedBytes.toResponseBody(body.contentType()))
-                .build()
-        }
-        val descrambled = descramble(bitmap, ticket.scrambleKey)
-        bitmap.recycle()
-        val out = Buffer()
-        descrambled.compress(Bitmap.CompressFormat.PNG, 100, out.outputStream())
-        descrambled.recycle()
-        return response.newBuilder()
-            .body(out.readByteArray().toResponseBody("image/png".toMediaType()))
+        return Response.Builder()
+            .request(request)
+            .protocol(Protocol.HTTP_1_1)
+            .code(200)
+            .message("OK")
+            .body(data.toResponseBody("image/jpeg".toMediaType()))
             .build()
     }
 
-    private fun ByteArray.xor(key: Int): ByteArray = ByteArray(size) { (this[it].toInt() xor key).toByte() }
-
-    private fun imul(a: Int, b: Int): Int = (a.toLong() * b.toLong()).toInt()
-
-    private fun seededRandom(key: String): () -> Double {
-        var hash = 0
-        for (c in key) {
-            hash = imul(hash, 31) + c.code
-        }
-        var state = hash
-        return {
-            state += 1831565813
-            var y = state
-            y = imul(y xor (y ushr 15), y or 1)
-            y = y xor (y + imul(y xor (y ushr 7), y or 61))
-            (y xor (y ushr 14)).toUInt().toLong().toDouble() / 4294967296.0
-        }
+    // A reader that closed on its own just before gets replaced
+    private suspend fun awaitPage(chapterUrl: String, index: Int): String = try {
+        awaitPage(reader(chapterUrl), index)
+    } catch (_: ReaderClosedException) {
+        awaitPage(reader(chapterUrl), index)
     }
 
-    private fun descramble(bitmap: Bitmap, key: String): Bitmap {
-        val rand = seededRandom(key)
-        val cols = 8
-        val rows = 8
-        val w = bitmap.width
-        val h = bitmap.height
-
-        val colBounds = IntArray(cols + 1)
-        colBounds[0] = 0
-        colBounds[cols] = w
-        val baseColW = w / cols
-        var x = 0
-        for (i in 0 until cols - 1) {
-            var cw = baseColW + Math.round((rand() * 0.7 - 0.35) * baseColW).toInt()
-            val remaining = cols - 1 - i
-            val maxW = w - x - remaining * 16
-            cw = cw.coerceIn(16, maxOf(16, maxW))
-            x += cw
-            colBounds[i + 1] = x
-        }
-
-        val rowBounds = IntArray(rows + 1)
-        rowBounds[0] = 0
-        rowBounds[rows] = h
-        val baseRowH = h / rows
-        var yy = 0
-        for (i in 0 until rows - 1) {
-            var rh = baseRowH + Math.round((rand() * 0.7 - 0.35) * baseRowH).toInt()
-            val remaining = rows - 1 - i
-            val maxH = h - yy - remaining * 16
-            rh = rh.coerceIn(16, maxOf(16, maxH))
-            yy += rh
-            rowBounds[i + 1] = yy
-        }
-
-        val colPerm = IntArray(cols) { it }
-        for (i in cols - 1 downTo 1) {
-            val j = (rand() * (i + 1)).toInt()
-            val tmp = colPerm[i]
-            colPerm[i] = colPerm[j]
-            colPerm[j] = tmp
-        }
-
-        val rowPerm = IntArray(rows) { it }
-        for (i in rows - 1 downTo 1) {
-            val j = (rand() * (i + 1)).toInt()
-            val tmp = rowPerm[i]
-            rowPerm[i] = rowPerm[j]
-            rowPerm[j] = tmp
-        }
-
-        val invCol = IntArray(cols)
-        for (i in 0 until cols) invCol[colPerm[i]] = i
-        val invRow = IntArray(rows)
-        for (i in 0 until rows) invRow[rowPerm[i]] = i
-
-        val shuffledColPos = IntArray(cols + 1)
-        shuffledColPos[0] = 0
-        for (i in 0 until cols) {
-            val shuffledIdx = colPerm[i]
-            shuffledColPos[i + 1] = shuffledColPos[i] + (colBounds[shuffledIdx + 1] - colBounds[shuffledIdx])
-        }
-
-        val shuffledRowPos = IntArray(rows + 1)
-        shuffledRowPos[0] = 0
-        for (i in 0 until rows) {
-            val shuffledIdx = rowPerm[i]
-            shuffledRowPos[i + 1] = shuffledRowPos[i] + (rowBounds[shuffledIdx + 1] - rowBounds[shuffledIdx])
-        }
-
-        val output = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
-        val paint = Paint().apply { isFilterBitmap = false }
-
-        for (row in 0 until rows) {
-            for (col in 0 until cols) {
-                val dx = colBounds[col]
-                val dy = rowBounds[row]
-                val dw = colBounds[col + 1] - colBounds[col]
-                val dh = rowBounds[row + 1] - rowBounds[row]
-                val sx = shuffledColPos[invCol[col]]
-                val sy = shuffledRowPos[invRow[row]]
-                val src = Rect(sx, sy, sx + dw, sy + dh)
-                val dst = Rect(dx, dy, dx + dw, dy + dh)
-                canvas.drawBitmap(bitmap, src, dst, paint)
-            }
-        }
-        return output
-    }
-
-    private fun isImage(bytes: ByteArray): Boolean {
-        val b = IntArray(HEADER_SIZE) { bytes[it].toInt() and 0xFF }
-        return (b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46) ||
-            (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) ||
-            (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) ||
-            (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46) ||
-            (b[4] == 0x66 && b[5] == 0x74 && b[6] == 0x79 && b[7] == 0x70)
-    }
-
-    private class ChapterSession(val chapterId: Int, val token: String, val expiresAt: Instant)
-
-    private class FailedOpen(val chapterUrl: String, val failedAt: Instant, val error: Exception)
-
-    private val sessionMutex = Mutex()
-    private val chapterSessions = HashMap<String, ChapterSession>()
-    private var failedOpen: FailedOpen? = null
-    private var currentReaderPass: ReaderPassDto? = null
-
-    // Session for pageInterceptor; a failed open replays for 10 s
-    private suspend fun chapterSession(chapterUrl: String, rejected: ChapterSession? = null): ChapterSession = sessionMutex.withLock {
-        val now = Clock.System.now()
-        chapterSessions[chapterUrl]
-            ?.takeIf { it !== rejected && it.expiresAt > now + 1.minutes }
-            ?.let { return@withLock it }
-        failedOpen
-            ?.takeIf { it.chapterUrl == chapterUrl && now - it.failedAt < 10.seconds }
-            ?.let { throw it.error }
+    private suspend fun awaitPage(reader: ChapterReader, index: Int): String {
+        val page = reader.want(index)
         try {
-            openChapter(chapterUrl)
-        } catch (e: Exception) {
-            failedOpen = FailedOpen(chapterUrl, now, e)
-            throw e
+            return page.await()
+        } finally {
+            reader.unwant(index)
         }
-        chapterSessions.getValue(chapterUrl)
     }
 
-    // Caller holds sessionMutex
-    private suspend fun openChapter(chapterUrl: String): PagesDto {
-        val url = "$apiUrl/mangas/$chapterUrl"
-        val dto = fetchChapter(url, readerPass())
-            ?: run {
-                currentReaderPass = null
-                fetchChapter(url, readerPass())
+    private class ChapterReader {
+        val total = CompletableDeferred<Int>()
+        val pages = ConcurrentHashMap<Int, CompletableDeferred<String>>()
+
+        // Pages the app waits on, with how many calls wait on each, and pages the site's reader has drawn
+        private val waiters = HashMap<Int, Int>()
+        val drawn: MutableSet<Int> = ConcurrentHashMap.newKeySet()
+
+        val wanted: List<Int> get() = synchronized(waiters) { waiters.keys.sorted() }
+
+        val busy get() = !total.isCompleted || synchronized(waiters) { waiters.isNotEmpty() }
+
+        @Volatile
+        var lastUsed = TimeSource.Monotonic.markNow()
+
+        @Volatile
+        var failure: Pair<Throwable, TimeSource.Monotonic.ValueTimeMark>? = null
+
+        @Volatile
+        var closed = false
+
+        lateinit var job: Job
+
+        fun page(index: Int) = pages.getOrPut(index) { CompletableDeferred() }.also { page ->
+            if (closed) page.completeExceptionally(failure?.first ?: ReaderClosedException())
+        }
+
+        fun want(index: Int): CompletableDeferred<String> = synchronized(waiters) {
+            waiters[index] = (waiters[index] ?: 0) + 1
+            lastUsed = TimeSource.Monotonic.markNow()
+            page(index)
+        }
+
+        fun unwant(index: Int) = synchronized(waiters) {
+            val left = waiters.getValue(index) - 1
+            if (left == 0) {
+                waiters.remove(index)
+                pages.remove(index)
+            } else {
+                waiters[index] = left
             }
-            ?: throw HttpException(403)
-        val token = dto.chapterSessionToken
-        val payload = Base64.decode(token.substringBefore("."), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-            .decodeToString()
-            .parseAs<ChapterTokenPayload>()
-        val now = Clock.System.now()
-        chapterSessions.values.removeAll { it.expiresAt < now }
-        chapterSessions[chapterUrl] = ChapterSession(payload.cid, token, Instant.fromEpochSeconds(payload.exp))
-        failedOpen = null
-        return dto
+            lastUsed = TimeSource.Monotonic.markNow()
+        }
+
+        fun close(error: Throwable) {
+            closed = true
+            total.completeExceptionally(error)
+            pages.values.forEach { it.completeExceptionally(error) }
+        }
     }
 
-    // Null when the site asks for a new reader pass
-    private suspend fun fetchChapter(url: String, pass: ReaderPassDto): PagesDto? {
-        val passHeaders = headersBuilder().set("X-Catharsis-Reader-Pass", pass.pass).build()
-        val response = client.get(url, passHeaders, ensureSuccess = false)
-        if (response.isSuccessful) return response.parseAs<PagesDto>()
-        if (response.code == 401) {
-            response.close()
-            throw Exception("This chapter requires login on the website")
+    private class ReaderClosedException : Exception("The site's reader closed")
+
+    private val readerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val readers = LinkedHashMap<String, ChapterReader>()
+
+    // The open reader for a chapter, or a new one; a failed one replays its error for a few seconds
+    private fun reader(chapterUrl: String): ChapterReader = synchronized(readers) {
+        readers[chapterUrl]?.let { reader ->
+            val failure = reader.failure
+            if (failure != null && failure.second.elapsedNow() < READER_RETRY_DELAY) return reader
+            if (!reader.closed) return reader
         }
-        val code = response.errorCode()
-        if (code == "READER_PASS_REQUIRED") return null
-        throw siteError(response.code, code)
+        readers.values.removeAll { it.closed }
+        if (readers.size >= MAX_READERS) {
+            readers.entries.filterNot { it.value.busy }
+                .maxByOrNull { it.value.lastUsed.elapsedNow() }
+                ?.let { (key, reader) ->
+                    reader.job.cancel()
+                    readers.remove(key)
+                }
+        }
+        val reader = ChapterReader()
+        readers[chapterUrl] = reader
+        reader.job = readerScope.launch {
+            var error: Throwable = ReaderClosedException()
+            try {
+                runReader(chapterUrl, reader)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                error = e
+                reader.failure = e to TimeSource.Monotonic.markNow()
+            } finally {
+                reader.close(error)
+            }
+        }
+        reader
     }
 
-    // Null when the site rejects the session token: expired, or issued to another IP
-    private fun mintPageTicket(chain: Interceptor.Chain, session: ChapterSession, pageIndex: Int): PageTicketResponse? {
-        val request = POST(
-            "$apiUrl/mangas/chapters/${session.chapterId}/page-ticket",
-            headers,
-            PageTicketRequest(pageIndex, session.token).toJsonRequestBody(),
-        )
-        val response = chain.proceed(request)
-        if (response.code == 401) {
-            response.close()
-            return null
-        }
-        if (!response.isSuccessful) {
-            response.close()
-            throw HttpException(response.code)
-        }
-        return response.parseAs<PageTicketResponse>()
+    // One scroll every 2-3 s across all readers, at most 40 pages a minute: the site 429s bursts of page tickets
+    private val turnLock = Any()
+    private var nextTurn = TimeSource.Monotonic.markNow()
+    private val pagesDrawn = ArrayDeque<TimeSource.Monotonic.ValueTimeMark>()
+
+    private fun takeTurn(): Boolean = synchronized(turnLock) {
+        while (pagesDrawn.firstOrNull()?.let { it.elapsedNow() > 1.minutes } == true) pagesDrawn.removeFirst()
+        if (!nextTurn.hasPassedNow() || pagesDrawn.size >= PAGES_PER_MINUTE) return false
+        nextTurn = TimeSource.Monotonic.markNow() + Random.nextLong(TURN_MS.first, TURN_MS.last).milliseconds
+        true
     }
 
-    // Reader pass from the site's Cap proof-of-work; caller holds sessionMutex
-    private suspend fun readerPass(): ReaderPassDto {
-        currentReaderPass
-            ?.takeIf { Instant.fromEpochMilliseconds(it.expiresAt) > Clock.System.now() + 1.minutes }
-            ?.let { return it }
-        val system = client.get("$apiUrl/system").parseAs<SystemDto>()
-        val capUrl = system.capApiEndpoint.toHttpUrl()
-        val challenge = client.post(capUrl.resolve("challenge")!!, RequestBody.EMPTY).parseAs<CapChallengeResponse>()
-        val solutions = (1..challenge.challenge.count).map { i ->
-            solveCap(
-                salt = capPrng("${challenge.token}$i", challenge.challenge.saltSize),
-                target = capPrng("${challenge.token}${i}d", challenge.challenge.difficulty),
+    private fun pageDrawn() = synchronized(turnLock) {
+        pagesDrawn.addLast(TimeSource.Monotonic.markNow())
+    }
+
+    private fun slowDown() = synchronized(turnLock) {
+        nextTurn = TimeSource.Monotonic.markNow() + SLOW_DOWN
+    }
+
+    // The site's own reader in a WebView, closed when no page was asked for in a while
+    @OptIn(NativeWebViewApi::class)
+    private suspend fun runReader(chapterUrl: String, reader: ChapterReader) {
+        val readerUrl = getChapterUrl(SChapter.create().apply { url = chapterUrl }).toHttpUrl()
+        val origin = "${readerUrl.scheme}://${readerUrl.host}"
+        val (bridgeName, controlName) = List(2) { randomName() }
+        val startedAt = TimeSource.Monotonic.markNow()
+        var turns = 0
+        runWebView<Unit>(timeout = Duration.INFINITE) {
+            // The site refuses the stock WebView user agent
+            userAgent = headers["User-Agent"]!!
+            blockImages = true
+            // The reader loads pages as they scroll into view, which needs a drawn WebView
+            withNativeWebView { BackgroundSurface.host(it) }
+            webMessageBridge(bridgeName, setOf(origin)) { payload ->
+                val message = payload.parseAs<ReaderMessage>()
+                when (message.type) {
+                    "total" -> reader.total.complete(message.total!!)
+                    "ready" -> if (reader.drawn.add(message.index!!)) pageDrawn()
+                    "page" -> reader.page(message.index!!).complete(message.data!!)
+                    "slow" -> slowDown()
+                    "error" -> reject(readerError(message.status!!, message.code))
+                }
+            }
+            // A login or redirect page in place of the reader
+            onPageStarted { url ->
+                val path = url.toHttpUrlOrNull()?.encodedPath
+                if (path != readerUrl.encodedPath) reject(Exception("The site sent the reader to ${path ?: url}; open the chapter in WebView"))
+            }
+            poll(READER_POLL) {
+                if (!reader.total.isCompleted && startedAt.elapsedNow() > READER_OPEN_TIMEOUT) {
+                    reject(Exception("The site's reader didn't open the chapter"))
+                    return@poll
+                }
+                val wanted = reader.wanted
+                if (wanted.isEmpty() && reader.lastUsed.elapsedNow() > READER_IDLE) {
+                    resolve(Unit)
+                    return@poll
+                }
+                if (wanted.any { it !in reader.drawn } && takeTurn()) turns++
+                evaluateJs("window.$controlName = ${ReaderControl(wanted, turns).toJsonString()};")
+            }
+            injectAtDocumentStart(
+                "(${asset("reader.js")})(message => window.$bridgeName.postMessage(message), \"$controlName\")",
+                setOf(origin),
             )
+            loadUrl(readerUrl.toString())
         }
-        val redeemed = client.post(
-            capUrl.resolve("redeem")!!,
-            CapRedeemRequest(challenge.token, solutions).toJsonRequestBody(),
-        ).parseAs<CapRedeemResponse>()
-        val capToken = redeemed.token?.takeIf { redeemed.success }
-            ?: throw Exception("Reader verification failed")
-        val response = client.post(
-            "$apiUrl/mangas/reader-pass",
-            ReaderPassRequest(capToken, system.capSitekey).toJsonRequestBody(),
-            ensureSuccess = false,
-        )
-        if (!response.isSuccessful) throw siteError(response.code, response.errorCode())
-        return response.parseAs<ReaderPassDto>().also { currentReaderPass = it }
-    }
-
-    // FNV-1a seeded xorshift32, as hex
-    private fun capPrng(seed: String, length: Int): String {
-        var state = seed.fold(FNV_OFFSET_BASIS) { hash, char -> (hash xor char.code) * FNV_PRIME }
-        return buildString {
-            while (this.length < length) {
-                state = state xor (state shl 13)
-                state = state xor (state ushr 17)
-                state = state xor (state shl 5)
-                append(state.toUInt().toString(16).padStart(8, '0'))
-            }
-        }.take(length)
-    }
-
-    private fun solveCap(salt: String, target: String): Int = generateSequence(0) { it + 1 }
-        .first { "$salt$it".sha256().toHexString().startsWith(target) }
-
-    private fun Response.errorCode(): String? {
-        if (header("Content-Type")?.startsWith("application/json") != true) {
-            close()
-            return null
-        }
-        return parseAs<ApiErrorDto>().code
     }
 
     // Error codes the site's reader shows a message for
-    private fun siteError(status: Int, code: String?): Exception = when (code) {
-        "DATACENTER_BLOCKED" -> Exception("The site doesn't allow reading through a VPN or proxy")
-        "EARLY_ACCESS" -> Exception("This chapter is still in early access on the site")
-        else -> HttpException(status)
+    private fun readerError(status: Int, code: String?): Exception = when {
+        code == "DATACENTER_BLOCKED" -> Exception("The site doesn't allow reading through a VPN or proxy")
+        code == "EARLY_ACCESS" -> Exception("This chapter is still in early access on the site")
+        code == "CAP_FAILED" -> Exception("The site's anti-bot check failed")
+        status == 401 -> Exception("This chapter requires login on the website")
+        status == 403 -> Exception("The site refused this chapter (${code ?: status}); open it in WebView")
+        else -> Exception("The site's reader shows no pages for this chapter; open it in WebView")
     }
 
-    private fun signatureInterceptor(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        if (!request.url.encodedPath.startsWith("/api/")) {
-            return chain.proceed(request)
-        }
-        val timestamp = Clock.System.now().toEpochMilliseconds().toString()
-        val nonce = generateNonce()
-        val signature = "$timestamp:$nonce:${request.method}".hmacSha256(HMAC_KEY.encodeToByteArray()).toHexString()
-        val newRequest = request.newBuilder()
-            .addHeader("x-catharsis-time", timestamp)
-            .addHeader("x-catharsis-nonce", nonce)
-            .addHeader("x-catharsis-sig", signature)
-            .build()
-        return chain.proceed(newRequest)
-    }
+    private fun randomName() = (1..(10..20).random())
+        .map { (('a'..'z') + ('A'..'Z')).random() }
+        .joinToString("")
 
-    private fun generateNonce(): String {
-        val chars = ('a'..'z') + ('A'..'Z') + ('0'..'9')
-        return (1..16).map { chars[Random.nextInt(chars.size)] }.joinToString("")
-    }
+    private fun asset(name: String) = javaClass.getResource("/assets/$name")!!.readText()
 
     companion object {
         private const val PAGE_SIZE = 24
-        private const val HMAC_KEY = "4$^£]C8j%La3"
-        private const val HEADER_SIZE = 12
         private const val PAGE_HOST = "catharsisworld.invalid"
-        private const val FNV_OFFSET_BASIS = -0x7ee3623b
-        private const val FNV_PRIME = 0x01000193
+        private const val MAX_READERS = 2
+        private val TURN_MS = 2000L..3000L
+        private const val PAGES_PER_MINUTE = 40
+        private val SLOW_DOWN = 10.seconds
+        private val READER_OPEN_TIMEOUT = 90.seconds
+        private val PAGE_TIMEOUT = 90.seconds
+        private val READER_IDLE = 60.seconds
+        private val READER_RETRY_DELAY = 10.seconds
+        private val READER_POLL = 500.milliseconds
+        private val CANCEL_POLL = 250.milliseconds
     }
 }
