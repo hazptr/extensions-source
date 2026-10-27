@@ -111,7 +111,13 @@ abstract class LycanToons : KeiSource() {
         TagsFilter(),
     )
 
-    private suspend fun metricsRequest(path: String, page: Int) = client.getXhr("$baseUrl/api/metrics/$path?limit=$PAGE_LIMIT&page=$page")
+    private suspend fun metricsRequest(path: String, page: Int) = client.getXhr(
+        "$baseUrl/api/metrics".toHttpUrl().newBuilder()
+            .addPathSegment(path)
+            .addQueryParameter("limit", PAGE_LIMIT.toString())
+            .addQueryParameter("page", page.toString())
+            .build(),
+    )
 
     private fun SManga.slug(): String = url.substringBefore("?").substringAfterLast("/")
 
