@@ -166,7 +166,7 @@ abstract class MangoLibreria : KeiSource() {
     }
 
     private suspend fun fetchMangaDetails(manga: SManga): SManga {
-        val doc = client.getDocument(baseUrl + manga.url).asJsoup()
+        val doc = client.getDocument(getMangaUrl(manga)).asJsoup()
         return SManga.create().apply {
             url = manga.url
             title = doc.selectFirst("h1")?.text().orEmpty()
@@ -186,7 +186,7 @@ abstract class MangoLibreria : KeiSource() {
     private suspend fun fetchChapterList(manga: SManga): List<SChapter> {
         val slug = manga.url.substringAfter("/comics/", "").substringBefore("?").substringBefore("/")
         val dataUrl = if (slug.isBlank()) {
-            baseUrl + manga.url
+            getMangaUrl(manga)
         } else {
             "$baseUrl/comics/$slug/__data.json".toHttpUrl().newBuilder()
                 .addQueryParameter("x-sveltekit-invalidated", "01")
