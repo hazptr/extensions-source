@@ -16,7 +16,6 @@ import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import kotlinx.serialization.json.JsonElement
-import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -33,13 +32,6 @@ abstract class TempleScan :
 
     override fun OkHttpClient.Builder.configureClient() = apply {
         rateLimit(1)
-    }
-
-    // the image cdn answers 403 to any request carrying Sec-Fetch-Dest, so no browser fetch metadata here
-    override fun Headers.Builder.configureHeaders() = apply {
-        removeAll("Origin")
-        set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-        set("Accept-Encoding", "gzip, deflate, br, zstd")
     }
 
     private val pages = SitePages(baseUrl) { headers["User-Agent"]!! }
