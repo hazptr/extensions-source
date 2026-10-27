@@ -7,7 +7,8 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
-import keiyoushi.network.get
+import keiyoushi.network.getDocument
+import keiyoushi.network.getXhr
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.asJsoup
 import keiyoushi.utils.getArrayOrNull
@@ -43,12 +44,10 @@ abstract class MangoLibreria : KeiSource() {
         .readTimeout(30, TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val request = chain.request()
-            // The image CDN blocks requests without a browser Sec-Fetch header and
-            // serves a placeholder when a Referer is present, so both are fixed here.
+            // The image CDN serves a placeholder when a Referer is present
             val newRequest = if (request.url.host != baseUrl.toHttpUrl().host) {
                 request.newBuilder()
                     .removeHeader("Referer")
-                    .header("Sec-Fetch-Dest", "image")
                     .build()
             } else {
                 request
@@ -69,16 +68,16 @@ abstract class MangoLibreria : KeiSource() {
     // ============================== Popular ==============================
     // The list pages render card <img> tags without src (covers are set by JS
     // during hydration), so covers are read from SvelteKit's data endpoint instead.
-    override suspend fun getPopularManga(page: Int): MangasPage = client.get(dataJsonUrl(page, sort = "views")).parseAsDataJson()
+    override suspend fun getPopularManga(page: Int): MangasPage = client.getXhr(dataJsonUrl(page, sort = "views")).parseAsDataJson()
 
     // ============================== Latest ===============================
-    override suspend fun getLatestUpdates(page: Int): MangasPage = client.get(dataJsonUrl(page)).parseAsDataJson()
+    override suspend fun getLatestUpdates(page: Int): MangasPage = client.getXhr(dataJsonUrl(page)).parseAsDataJson()
 
     // ============================== Search ===============================
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage = if (query.isBlank()) {
-        client.get(dataJsonUrl(page, sort = "views")).parseAsDataJson()
+        client.getXhr(dataJsonUrl(page, sort = "views")).parseAsDataJson()
     } else {
-        client.get(dataJsonUrl(page, query = query)).parseAsDataJson()
+        client.getXhr(dataJsonUrl(page, query = query)).parseAsDataJson()
     }
 
     private fun dataJsonUrl(page: Int, sort: String? = null, query: String? = null) = "$baseUrl/comics/__data.json".toHttpUrl().newBuilder().apply {
@@ -167,7 +166,7 @@ abstract class MangoLibreria : KeiSource() {
     }
 
     private suspend fun fetchMangaDetails(manga: SManga): SManga {
-        val doc = client.get(baseUrl + manga.url).asJsoup()
+        val doc = client.getDocument(baseUrl + manga.url).asJsoup()
         return SManga.create().apply {
             url = manga.url
             title = doc.selectFirst("h1")?.text().orEmpty()
@@ -194,7 +193,7 @@ abstract class MangoLibreria : KeiSource() {
                 .build()
                 .toString()
         }
-        val json = client.get(dataUrl).parseAs<JsonObject>()
+        val json = client.getXhr(dataUrl).parseAs<JsonObject>()
         val nodes = json.getArrayOrNull("nodes") ?: return emptyList()
         for (node in nodes) {
             val data = (node as? JsonObject)?.getArrayOrNull("data") ?: continue
@@ -237,7 +236,7 @@ abstract class MangoLibreria : KeiSource() {
         val dataUrl = "$baseUrl$path/__data.json".toHttpUrl().newBuilder()
             .addQueryParameter("x-sveltekit-invalidated", "01")
             .build()
-        val json = client.get(dataUrl).parseAs<JsonObject>()
+        val json = client.getXhr(dataUrl).parseAs<JsonObject>()
         val nodes = json.getArrayOrNull("nodes") ?: return emptyList()
         for (node in nodes) {
             val data = (node as? JsonObject)?.getArrayOrNull("data") ?: continue
