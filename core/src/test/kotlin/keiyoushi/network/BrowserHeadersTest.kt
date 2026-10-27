@@ -244,7 +244,7 @@ class BrowserHeadersTest {
         var sent: Request? = null
         val client = OkHttpClient.Builder()
             .addInterceptor(BrowserHeadersInterceptor { "https://a.test" })
-            .apply { if (wireOrder) addInterceptor(BrowserHeaderOrderInterceptor) }
+            .apply { if (wireOrder) addInterceptor(BrowserHeaderOrderInterceptor()) }
             .addInterceptor { chain ->
                 sent = chain.request()
                 Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")

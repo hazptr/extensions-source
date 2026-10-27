@@ -76,7 +76,7 @@ class BrowserHeadersCacheTest {
         .addInterceptor(BrowserHeadersInterceptor { base })
         .addInterceptor(CompressionInterceptor(Gzip, Deflate, Brotli, Zstd))
         .addNetworkInterceptor(CacheControlInterceptor())
-        .addNetworkInterceptor(BrowserHeaderOrderInterceptor)
+        .addNetworkInterceptor(BrowserHeaderOrderInterceptor())
         .build()
 
     @After

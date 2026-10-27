@@ -93,12 +93,13 @@ private fun relation(initiator: HttpUrl, url: HttpUrl): String = when {
  * which the cache has read by then; adds Chrome's `Cache-Control` on a form submit. Runs on the network level, so it sees `Cookie` and the body headers
  * OkHttp adds.
  */
-internal object BrowserHeaderOrderInterceptor : Interceptor {
+internal class BrowserHeaderOrderInterceptor(private val http2: Boolean? = null) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         if (request.kind == null) return chain.proceed(request)
         val browser = Browser.of(request.header("User-Agent").orEmpty()) ?: return chain.proceed(request)
-        val http2 = chain.connection()?.protocol() == Protocol.HTTP_2
+        // Known up front when another transport sends the request (Cronet)
+        val http2 = http2 ?: (chain.connection()?.protocol() == Protocol.HTTP_2)
         val navigation = request.header("Sec-Fetch-Mode") == "navigate"
         val order = when {
             navigation -> browser.documentOrder

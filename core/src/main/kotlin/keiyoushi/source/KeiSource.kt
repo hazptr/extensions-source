@@ -3,6 +3,7 @@ package keiyoushi.source
 import android.util.Log
 import com.squareup.zstd.okio.zstdCompress
 import com.squareup.zstd.okio.zstdDecompress
+import eu.kanade.tachiyomi.network.Cronet
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -127,7 +128,7 @@ abstract class KeiSource : HttpSource() {
             // allow caching when server doesn't explicitly say anything
             addNetworkInterceptor(CacheControlInterceptor())
 
-            addNetworkInterceptor(BrowserHeaderOrderInterceptor)
+            addNetworkInterceptor(BrowserHeaderOrderInterceptor())
 
             // keep the source's rate limiter as the last network interceptor
             networkInterceptors().apply {
@@ -137,6 +138,23 @@ abstract class KeiSource : HttpSource() {
                     add(rateLimiter)
                 }
             }
+        }.build().withCronet()
+    }
+
+    // The app's Cronet when the user turned it on. It sends the request itself, so it goes last: the network
+    // interceptors move above it, and compression and caching are left to Cronet
+    private fun OkHttpClient.withCronet(): OkHttpClient {
+        val cronet = try {
+            Cronet.interceptor(cookieJar, followRedirects)
+        } catch (_: NoClassDefFoundError) {
+            null
+        } ?: return this
+        return newBuilder().apply {
+            interceptors().removeAll { it is CompressionInterceptor }
+            val network = networkInterceptors().filterNot { it is CacheControlInterceptor }
+            networkInterceptors().clear()
+            network.forEach { addInterceptor(if (it is BrowserHeaderOrderInterceptor) BrowserHeaderOrderInterceptor(http2 = true) else it) }
+            addInterceptor(cronet)
         }.build()
     }
 
