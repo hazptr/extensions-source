@@ -134,7 +134,7 @@ abstract class Doujinio : KeiSource() {
         val mangaDeferred = async { if (fetchDetails) fetchMangaDetails(id) else manga }
         val chaptersDeferred = async {
             if (fetchChapters) {
-                val response = client.getXhr("$baseUrl/api/chapters?manga_id=$id", apiHeaders)
+                val response = client.getXhr("$baseUrl/api/chapters".toHttpUrl().newBuilder().addQueryParameter("manga_id", id).build(), apiHeaders)
                 response.parseData<List<Chapter>>().map { it.toSChapter() }.reversed()
             } else {
                 chapters
