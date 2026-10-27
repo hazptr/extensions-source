@@ -7,8 +7,9 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.network.post
+import keiyoushi.network.getDocument
+import keiyoushi.network.getXhr
+import keiyoushi.network.postXhr
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.extractNextJs
@@ -17,7 +18,6 @@ import keiyoushi.utils.toJsonRequestBody
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
-import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -28,10 +28,6 @@ abstract class LycanToons : KeiSource() {
     override fun OkHttpClient.Builder.configureClient() = apply {
         rateLimit(2)
     }
-
-    // The site refuses requests without Sec-Fetch-Site; its image CDN refuses any with Origin
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = removeAll("Origin")
-        .set("Sec-Fetch-Site", "same-origin")
 
     override suspend fun getPopularManga(page: Int): MangasPage = metricsRequest("popular", page).parseAs<PopularResponse>().toMangasPage()
 
@@ -56,7 +52,7 @@ abstract class LycanToons : KeiSource() {
             tags = tags.distinct(),
         )
 
-        return client.post("$baseUrl/api/series", payload.toJsonRequestBody())
+        return client.postXhr("$baseUrl/api/series", payload.toJsonRequestBody())
             .parseAs<SearchResponse>()
             .toMangasPage()
     }
@@ -78,7 +74,7 @@ abstract class LycanToons : KeiSource() {
 
         val details = async {
             if (fetchDetails) {
-                client.get("$baseUrl/series/$slug").extractNextJs<SeriesDto>()!!.toSManga()
+                client.getDocument("$baseUrl/series/$slug").extractNextJs<SeriesDto>()!!.toSManga()
             } else {
                 manga
             }
@@ -86,7 +82,7 @@ abstract class LycanToons : KeiSource() {
 
         val chapterList = async {
             if (fetchChapters) {
-                client.get("$baseUrl/series/$slug/1").extractNextJs<ChapterResponse>()!!.capitulos
+                client.getDocument("$baseUrl/series/$slug/1").extractNextJs<ChapterResponse>()!!.capitulos
                     .map { it.toSChapter(slug) }
                     .sortedByDescending { it.chapter_number }
             } else {
@@ -98,9 +94,12 @@ abstract class LycanToons : KeiSource() {
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val chapterId = client.get(getChapterUrl(chapter)).extractNextJs<ChapterIdDto>()!!.capituloId
+        val chapterUrl = getChapterUrl(chapter)
+        val chapterId = client.getDocument(chapterUrl).extractNextJs<ChapterIdDto>()!!.capituloId
 
-        return client.get("$baseUrl/api/chapters/$chapterId/view-pages")
+        // Loaded by the chapter page's reader
+        val readerHeaders = headersBuilder().set("Referer", chapterUrl).build()
+        return client.getXhr("$baseUrl/api/chapters/$chapterId/view-pages", readerHeaders)
             .parseAs<PageList>()
             .pages
             .mapIndexed { index, imageUrl -> Page(index, imageUrl = imageUrl) }
@@ -112,7 +111,7 @@ abstract class LycanToons : KeiSource() {
         TagsFilter(),
     )
 
-    private suspend fun metricsRequest(path: String, page: Int) = client.get("$baseUrl/api/metrics/$path?limit=$PAGE_LIMIT&page=$page")
+    private suspend fun metricsRequest(path: String, page: Int) = client.getXhr("$baseUrl/api/metrics/$path?limit=$PAGE_LIMIT&page=$page")
 
     private fun SManga.slug(): String = url.substringBefore("?").substringAfterLast("/")
 
