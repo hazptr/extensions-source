@@ -119,8 +119,12 @@ abstract class CreateExtensionJarTask : DefaultTask() {
         val shrunk = temporaryDir.resolve("shrunk.jar")
 
         val modifiedProguardConfigFile = temporaryDir.resolve("sanitized-proguard-configuration.txt").apply {
-            val sanitizedRules = proguardConfigFile.get().asFile
-                .readLines().toMutableList()
+            // r8-only syntax from library consumer rules
+            val sanitizedRules = proguardConfigFile.get().asFile.readText()
+                .split(Regex("\n(?=-)"))
+                .filterNot { "_NONNULL_" in it }
+                .map { it.replace(R8_ONLY_MODIFIERS, "") }
+                .toMutableList()
 
             // make it forgiving like r8
             sanitizedRules.add("-dontwarn **")
@@ -182,3 +186,5 @@ abstract class CreateExtensionJarTask : DefaultTask() {
 // keiyoushi's birthday:  Jan 6, 2024
 private const val FIXED_JAR_TIME = 1704499200000L
 internal fun fixedTimeEntry(name: String): JarEntry = JarEntry(name).apply { time = FIXED_JAR_TIME }
+
+private val R8_ONLY_MODIFIERS = Regex(",\\s*allow(accessmodification|repackage)")
