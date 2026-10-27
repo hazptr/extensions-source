@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.extension.en.doujinio
 
+import eu.kanade.tachiyomi.network.HttpException
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -7,8 +8,9 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
-import keiyoushi.network.get
-import keiyoushi.network.post
+import keiyoushi.network.getDocument
+import keiyoushi.network.getXhr
+import keiyoushi.network.postXhr
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
@@ -19,10 +21,14 @@ import keiyoushi.utils.toJsonString
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
+import okhttp3.CacheControl
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Response
+import java.net.URLDecoder
+import java.util.concurrent.TimeUnit
 
 const val LATEST_LIMIT = 20
 
@@ -36,19 +42,29 @@ abstract class Doujinio : KeiSource() {
         rateLimit(2) { it.host == baseUrlHost }
     }
 
-    // Search/latest errors with 419 when referer or origin is present
-    private val cleanHeaders
-        get() = headersBuilder().apply {
-            removeAll("Referer")
-            removeAll("Origin")
-        }.build()
+    // What the site's own API calls send
+    private val apiHeaders get() = headersBuilder()
+        .set("Accept", "application/json, text/plain, */*")
+        .set("X-Requested-With", "XMLHttpRequest")
+        .build()
+
+    // POSTs also carry the site's CSRF token from its XSRF-TOKEN cookie
+    private suspend fun postHeaders(): Headers {
+        val token = xsrfToken() ?: run {
+            client.getDocument(baseUrl, CacheControl.Builder().maxAge(0, TimeUnit.SECONDS).build()).close()
+            xsrfToken()
+        }
+        return apiHeaders.newBuilder().apply { token?.let { set("X-XSRF-TOKEN", URLDecoder.decode(it, "UTF-8")) } }.build()
+    }
+
+    private fun xsrfToken() = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).firstOrNull { it.name == "XSRF-TOKEN" }?.value
 
     // Latest
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val response = client.post(
+        val response = client.postXhr(
             "$baseUrl/api/mangas/newest",
-            cleanHeaders,
+            postHeaders(),
             body = LatestRequest(
                 limit = LATEST_LIMIT,
                 offset = (page - 1) * LATEST_LIMIT,
@@ -61,7 +77,7 @@ abstract class Doujinio : KeiSource() {
     // Popular
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val response = client.get("$baseUrl/api/mangas/popular")
+        val response = client.getXhr("$baseUrl/api/mangas/popular", apiHeaders)
         return MangasPage(
             response.parseData<List<Manga>>().map { it.toSManga() },
             hasNextPage = false,
@@ -74,9 +90,9 @@ abstract class Doujinio : KeiSource() {
         val sortFilter = filters.firstInstanceOrNull<SortFilter>()!!
         val tags = filters.firstInstanceOrNull<TagGroup>()?.tagIds ?: emptyList()
 
-        val response = client.post(
+        val response = client.postXhr(
             "$baseUrl/api/mangas/search",
-            cleanHeaders,
+            postHeaders(),
             body = SearchRequest(
                 query,
                 page,
@@ -103,7 +119,7 @@ abstract class Doujinio : KeiSource() {
     }
 
     private suspend fun fetchMangaDetails(id: String): SManga {
-        val response = client.get("$baseUrl/api/mangas/$id")
+        val response = client.getXhr("$baseUrl/api/mangas/$id", apiHeaders)
         return response.parseData<Manga>().toSManga()
     }
 
@@ -118,7 +134,7 @@ abstract class Doujinio : KeiSource() {
         val mangaDeferred = async { if (fetchDetails) fetchMangaDetails(id) else manga }
         val chaptersDeferred = async {
             if (fetchChapters) {
-                val response = client.get("$baseUrl/api/chapters?manga_id=$id")
+                val response = client.getXhr("$baseUrl/api/chapters?manga_id=$id", apiHeaders)
                 response.parseData<List<Chapter>>().map { it.toSChapter() }.reversed()
             } else {
                 chapters
@@ -133,15 +149,19 @@ abstract class Doujinio : KeiSource() {
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val chapterApiUrl = "$baseUrl/api/mangas/${getIdsFromUrl(chapter.url)}"
-        val response = client.get(chapterApiUrl + "/manifest")
+        val response = client.getXhr(chapterApiUrl + "/manifest", apiHeaders, ensureSuccess = false)
 
-        if (response.headers["content-type"]?.contains("text/html") == true) {
+        if (response.code == 401) {
             response.close()
             error("Login through WebView to read")
         }
+        if (!response.isSuccessful) {
+            response.close()
+            throw HttpException(response.code)
+        }
 
         val fragment = runCatching {
-            val res = client.get(chapterApiUrl + "/chm")
+            val res = client.getXhr(chapterApiUrl + "/chm", apiHeaders)
             "#" + res.parseAs<MangaKeys>().toJsonString()
         }.getOrElse { "" }
 
@@ -155,7 +175,7 @@ abstract class Doujinio : KeiSource() {
     override val supportsFilterFetching = true
 
     override suspend fun fetchFilterData(): JsonElement {
-        val response = client.get("$baseUrl/api/tags")
+        val response = client.getXhr("$baseUrl/api/tags", apiHeaders)
         return response.parseData<List<Tag>>().toJsonElement()
     }
 
