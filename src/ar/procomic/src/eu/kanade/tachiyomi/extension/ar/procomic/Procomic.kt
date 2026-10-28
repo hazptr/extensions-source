@@ -4,8 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
+import android.util.LruCache
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
+import eu.kanade.tachiyomi.network.HttpException
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -23,6 +25,7 @@ import keiyoushi.utils.asJsoup
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.firstInstance
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.getTurnstileToken
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.string
 import keiyoushi.utils.toJsonRequestBody
@@ -31,15 +34,19 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import okhttp3.Call
+import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import okhttp3.RequestBody
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.asResponseBody
 import okio.Buffer
@@ -59,7 +66,13 @@ abstract class Procomic :
         .addCookie("safe_browsing" to "off")
         .addCookie({ MIRROR_HOST }, "safe_browsing" to "off")
 
+    // The site serves an app banner for pages past 3 when the chapter page request carries an Origin.
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = removeAll("Origin")
+
     private val siteHost get() = baseUrl.toHttpUrl().host
+
+    private val chapterPasses = LruCache<Int, String>(16)
+    private val passMutex = Mutex()
 
     private var popularPage = 1
     private var latestPage = 1
@@ -194,14 +207,17 @@ abstract class Procomic :
         .toString()
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val reader = readerProps(getChapterUrl(chapter)) ?: return emptyList()
-        val deferred = reader.deferredMedia?.let { deferredMedia(reader.chapterId, it.token) }
+        val chapterUrl = getChapterUrl(chapter)
+        val reader = readerProps(chapterUrl) ?: return emptyList()
+        val deferred = reader.deferredMedia?.let { deferredMedia(reader.chapterId, it, chapterUrl) }
+        val pass = deferred?.pass?.also { chapterPasses.put(reader.chapterId, it) }
 
         val images = reader.appImages.map { it.mobile ?: it.desktop!! } +
-            deferred?.images.orEmpty().map { signedImageUrl(it) }
+            deferred?.images.orEmpty().map { signedImageUrl(it, reader.chapterId, pass) }
         val maps = deferred?.maps.orEmpty().mapIndexed { index, entry ->
             val map = MapRequestDto(
                 reader.chapterId,
+                pass,
                 MapPlanBodyDto(entry.token, entry.method, reader.cdnPath, images.size + index),
             )
             HttpUrl.Builder().scheme("http").host(PIECE_HOST).fragment(map.toJsonString()).build().toString()
@@ -220,19 +236,36 @@ abstract class Procomic :
 
     private fun isReaderProps(element: JsonElement) = element is JsonObject && "chapterId" in element && "appImages" in element
 
-    private suspend fun deferredMedia(chapterId: Int, token: String): DeferredDataDto {
+    private suspend fun deferredMedia(chapterId: Int, media: DeferredMediaDto, chapterUrl: String): DeferredDataDto {
         val url = baseUrl.toHttpUrl().newBuilder()
             .addPathSegment("chapter-deferred-media")
             .addPathSegment(chapterId.toString())
-            .addQueryParameter("token", token)
+            .addQueryParameter("token", media.token)
+            .apply { media.splitIndex?.let { addQueryParameter("split", it.toString()) } }
             .build()
-        return client.get(url).parseAs<DeferredPageDto>().data
+        val turnstileHeaders = headers.newBuilder().apply {
+            if (media.requireTurnstile) {
+                // Visible mode uses the site's login widget.
+                val loginSiteKey = if (media.turnstileMode == "visible") loginTurnstileSiteKey() else null
+                set("x-turnstile-token", getTurnstileToken(chapterUrl, loginSiteKey ?: TURNSTILE_SITE_KEY))
+                set("x-turnstile-widget", if (loginSiteKey != null) "login" else "reader")
+            }
+        }.build()
+        return client.get(url, turnstileHeaders).parseAs<DeferredPageDto>().data
     }
 
-    private fun signedImageUrl(image: String) = HttpUrl.Builder()
+    private suspend fun loginTurnstileSiteKey(): String? = client.get("$baseUrl/api/auth/public-settings")
+        .parseAs<PublicSettingsDto>().loginTurnstile
+        ?.takeIf { it.enabled }
+        ?.siteKey
+        ?.takeIf { it.isNotBlank() }
+
+    private fun signedImageUrl(image: String, chapterId: Int, pass: String?) = HttpUrl.Builder()
         .scheme("http")
         .host(SIGNED_IMAGE_HOST)
         .addQueryParameter("url", image)
+        .addQueryParameter("chapter", chapterId.toString())
+        .apply { pass?.let { addQueryParameter("pass", it) } }
         .build()
         .toString()
 
@@ -253,7 +286,7 @@ abstract class Procomic :
             url.host == SIGNED_IMAGE_HOST -> {
                 // The site signs each image url right before loading it; signatures last minutes.
                 val image = url.queryParameter("url")!!
-                val signed = runBlocking { signImage(image) }
+                val signed = runBlocking { signImage(image, url.queryParameter("chapter")!!.toInt(), url.queryParameter("pass")) }
                 val signedUrl = baseUrl.toHttpUrl().newBuilder()
                     .addPathSegments(CDN_IMAGE_PATH)
                     .addQueryParameter("url", image)
@@ -266,11 +299,11 @@ abstract class Procomic :
         }
     }
 
-    private suspend fun signImage(image: String): SignedImageDto {
+    private suspend fun signImage(image: String, chapterId: Int, pass: String?): SignedImageDto {
         val url = baseUrl.toHttpUrl().newBuilder()
             .addPathSegments("$CDN_IMAGE_PATH/sign")
             .build()
-        return client.post(url, SignRequestDto(image).toJsonRequestBody()).parseAs<SignedImageDto>()
+        return postWithPass(url, chapterId, pass, SignRequestDto(image).toJsonRequestBody()).parseAs<SignedImageDto>()
     }
 
     private suspend fun mapPlan(map: MapRequestDto): MapPlanDto {
@@ -278,8 +311,41 @@ abstract class Procomic :
             .addPathSegment("chapter-map-proxy-plan")
             .addPathSegment(map.chapterId.toString())
             .build()
-        return client.post(url, map.plan.toJsonRequestBody()).parseAs<MapPlanResponseDto>().data.map
+        return postWithPass(url, map.chapterId, map.pass, map.plan.toJsonRequestBody()).parseAs<MapPlanResponseDto>().data.map
     }
+
+    // Renews an expired chapter pass once.
+    private suspend fun postWithPass(url: HttpUrl, chapterId: Int, pass: String?, body: RequestBody): Response {
+        val current = chapterPasses[chapterId] ?: pass
+        var response = client.post(url, passHeaders(current), body, ensureSuccess = false)
+        if (response.code == 403 && current != null && response.body.contentType()?.subtype == "json") {
+            val error = response.parseAs<ErrorDto>().error
+            check(error == PASS_EXPIRED) { "HTTP 403: $error" }
+            response = client.post(url, passHeaders(renewPass(chapterId, current)), body, ensureSuccess = false)
+        }
+        if (!response.isSuccessful) {
+            response.close()
+            throw HttpException(response.code)
+        }
+        return response
+    }
+
+    private suspend fun renewPass(chapterId: Int, expired: String): String = passMutex.withLock {
+        chapterPasses[chapterId]?.takeIf { it != expired }?.let { return it }
+        val url = baseUrl.toHttpUrl().newBuilder()
+            .addPathSegment("chapter-deferred-media")
+            .addPathSegment(chapterId.toString())
+            .addPathSegment("image-pass")
+            .build()
+        client.post(url, passHeaders(null), PassDto(expired).toJsonRequestBody()).parseAs<PassDto>().pass
+            .also { chapterPasses.put(chapterId, it) }
+    }
+
+    // The site's POSTs need the Origin left out of GETs.
+    private fun passHeaders(pass: String?) = headers.newBuilder()
+        .set("Origin", baseUrl)
+        .apply { pass?.let { set("x-chapter-pass", it) } }
+        .build()
 
     private suspend fun stitch(url: HttpUrl, call: Call): Buffer {
         val plan = mapPlan(url.fragment!!.parseAs<MapRequestDto>())
@@ -326,6 +392,8 @@ abstract class Procomic :
         private const val CDN_IMAGE_PATH = "api/cdn-image"
         private const val PIECE_HOST = "procomic.pieces"
         private const val SIGNED_IMAGE_HOST = "procomic.signed"
+        private const val TURNSTILE_SITE_KEY = "0x4AAAAAACk1d7qWJi_of2qU"
+        private const val PASS_EXPIRED = "chapter_pass_expired"
         private const val SHOW_LOCKED_KEY = "showLockedChapters"
         private val JPEG_MEDIA_TYPE = "image/jpeg".toMediaType()
     }
