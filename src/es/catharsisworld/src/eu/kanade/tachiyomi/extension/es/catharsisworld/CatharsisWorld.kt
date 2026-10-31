@@ -27,6 +27,7 @@ import keiyoushi.utils.parseAs
 import keiyoushi.utils.sha256
 import keiyoushi.utils.toJsonElement
 import keiyoushi.utils.toJsonRequestBody
+import keiyoushi.utils.xor
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,7 +40,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.Response
-import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.ResponseBody.Companion.asResponseBody
 import okio.Buffer
 import java.io.IOException
 import kotlin.time.Clock
@@ -163,10 +164,11 @@ abstract class CatharsisWorld : KeiSource() {
         if (request.url.host != PAGE_HOST) return chain.proceed(request)
         val chapterUrl = request.url.encodedPath.removePrefix("/")
         val pageIndex = request.url.queryParameter("page")!!.toInt()
+        val fetch = readerFetch(chapterUrl)
         val ticket = try {
             val session = runBlocking { chapterSession(chapterUrl) }
-            mintPageTicket(chain, session, pageIndex, chapterUrl)
-                ?: mintPageTicket(chain, runBlocking { chapterSession(chapterUrl, rejected = session) }, pageIndex, chapterUrl)
+            mintPageTicket(chain, session, pageIndex, fetch)
+                ?: mintPageTicket(chain, runBlocking { chapterSession(chapterUrl, rejected = session) }, pageIndex, fetch)
                 ?: throw HttpException(401)
         } catch (e: IOException) {
             throw e
@@ -175,7 +177,7 @@ abstract class CatharsisWorld : KeiSource() {
         }
         val imageRequest = request.newBuilder()
             .url("$apiUrl/mangas/pages/${ticket.signedToken}")
-            .fetch(readerFetch(chapterUrl))
+            .fetch(fetch)
             .build()
         val response = chain.proceed(imageRequest)
         if (!response.isSuccessful) return response
@@ -183,18 +185,20 @@ abstract class CatharsisWorld : KeiSource() {
         val body = response.body
         val source = body.source()
         if (!source.request(HEADER_SIZE.toLong())) return response
-        if (source.buffer.size < HEADER_SIZE) return response
         val header = source.buffer.snapshot(HEADER_SIZE).toByteArray()
         val decoded = header.xor(ticket.xorByte)
         // XOR-ed with the ticket's byte unless it already starts with an image signature
         if (isImage(header) || !isImage(decoded)) return response
 
-        val bytes = body.bytes()
-        val decodedBytes = bytes.xor(ticket.xorByte)
-        val bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
-        if (bitmap == null || ticket.scrambleKey == null || bitmap.width < 200 || bitmap.height < 200) {
-            return response.newBuilder()
-                .body(decodedBytes.toResponseBody(body.contentType()))
+        val plain = response.xor(ticket.xorByte)
+        if (ticket.scrambleKey == null) return plain
+        val image = Buffer()
+        plain.body.source().use(image::writeAll)
+        val bitmap = BitmapFactory.decodeStream(image.peek().inputStream())
+        if (bitmap == null || bitmap.width < 200 || bitmap.height < 200) {
+            bitmap?.recycle()
+            return plain.newBuilder()
+                .body(image.asResponseBody(body.contentType(), image.size))
                 .build()
         }
         val descrambled = descramble(bitmap, ticket.scrambleKey)
@@ -203,11 +207,9 @@ abstract class CatharsisWorld : KeiSource() {
         descrambled.compress(Bitmap.CompressFormat.PNG, 100, out.outputStream())
         descrambled.recycle()
         return response.newBuilder()
-            .body(out.readByteArray().toResponseBody("image/png".toMediaType()))
+            .body(out.asResponseBody("image/png".toMediaType(), out.size))
             .build()
     }
-
-    private fun ByteArray.xor(key: Int): ByteArray = ByteArray(size) { (this[it].toInt() xor key).toByte() }
 
     private fun imul(a: Int, b: Int): Int = (a.toLong() * b.toLong()).toInt()
 
@@ -382,25 +384,26 @@ abstract class CatharsisWorld : KeiSource() {
             response.close()
             throw Exception("This chapter requires login on the website")
         }
-        val code = response.errorCode()
+        val code = response.apiError()?.code
         if (code == "READER_PASS_REQUIRED") return null
         throw siteError(response.code, code)
     }
 
     // Null when the site rejects the session token: expired, or issued to another IP
-    private fun mintPageTicket(chain: Interceptor.Chain, session: ChapterSession, pageIndex: Int, chapterUrl: String): PageTicketResponse? {
+    private fun mintPageTicket(chain: Interceptor.Chain, session: ChapterSession, pageIndex: Int, fetch: Fetch): PageTicketResponse? {
         val request = POST(
             "$apiUrl/mangas/chapters/${session.chapterId}/page-ticket",
             apiHeaders,
             PageTicketRequest(pageIndex, session.token).toJsonRequestBody(),
-        ).newBuilder().fetch(readerFetch(chapterUrl)).build()
+        ).newBuilder().fetch(fetch).build()
         var response = chain.proceed(request)
         // Waits out READING_TOO_FAST like the site's reader
         var waited = 0L
         while (response.code == 429) {
-            val error = response.parseAs<ApiErrorDto>()
-            val delay = (error.retryAfterMs ?: 0) + 150
-            if (error.code != "READING_TOO_FAST" || waited + delay > TICKET_WAIT.inWholeMilliseconds) throw HttpException(429)
+            val error = response.apiError()
+            val retryAfter = error?.retryAfterMs?.takeIf { it > 0 && error.code == "READING_TOO_FAST" } ?: throw HttpException(429)
+            val delay = retryAfter + 150
+            if (waited + delay > TICKET_WAIT.inWholeMilliseconds) throw HttpException(429)
             Thread.sleep(delay)
             waited += delay
             response = chain.proceed(request)
@@ -444,7 +447,7 @@ abstract class CatharsisWorld : KeiSource() {
             ReaderPassRequest(capToken, system.capSitekey).toJsonRequestBody(),
             ensureSuccess = false,
         )
-        if (!response.isSuccessful) throw siteError(response.code, response.errorCode())
+        if (!response.isSuccessful) throw siteError(response.code, response.apiError()?.code)
         return response.parseAs<ReaderPassDto>().also { currentReaderPass = it }
     }
 
@@ -464,12 +467,12 @@ abstract class CatharsisWorld : KeiSource() {
     private fun solveCap(salt: String, target: String): Int = generateSequence(0) { it + 1 }
         .first { "$salt$it".sha256().toHexString().startsWith(target) }
 
-    private fun Response.errorCode(): String? {
+    private fun Response.apiError(): ApiErrorDto? {
         if (header("Content-Type")?.startsWith("application/json") != true) {
             close()
             return null
         }
-        return parseAs<ApiErrorDto>().code
+        return parseAs<ApiErrorDto>()
     }
 
     // Error codes the site's reader shows a message for

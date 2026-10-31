@@ -26,7 +26,6 @@ class MangaDto(
     @SerialName("nombre_alt_2") private val nombreAlt2: String? = null,
     @SerialName("fk_generos") private val generos: List<MangaGenreDto> = emptyList(),
     val capitulos: List<ChapterDto> = emptyList(),
-    @SerialName("requires_login") val requiresLogin: Boolean = false,
 ) {
     fun toSManga(baseUrl: String) = SManga.create().apply {
         url = id.toString()
@@ -35,15 +34,15 @@ class MangaDto(
     }
 
     fun toSMangaDetails(baseUrl: String) = toSManga(baseUrl).apply {
-        genre = (listOfNotNull(tipo?.replaceFirstChar(Char::uppercase)) + generos.map { it.genre.nombre }).joinToString()
+        genre = (listOfNotNull(tipo?.replaceFirstChar(Char::uppercase)) + generos.map { it.genre.nombre }).joinToString().takeIf { it.isNotEmpty() }
         description = buildString {
             descripcion?.let { append(it.trim()) }
             val altNames = listOfNotNull(nombreAlt1, nombreAlt2).filter(String::isNotBlank)
             if (altNames.isNotEmpty()) {
                 if (isNotEmpty()) append("\n\n")
-                append("Nombres alternativos:\n", altNames.joinToString("\n"))
+                append("**Nombres alternativos:**\n", altNames.joinToString("\n") { "- $it" })
             }
-        }
+        }.takeIf { it.isNotEmpty() }
         status = when (estado) {
             "curso" -> SManga.ONGOING
             "pausado" -> SManga.ON_HIATUS
@@ -99,7 +98,6 @@ class PageTicketRequest(
 @Serializable
 class PageTicketResponse(
     val signedToken: String,
-    private val pageId: String,
     val scrambleKey: String? = null,
     val xorByte: Int,
 )
