@@ -5,6 +5,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import keiyoushi.utils.tryParse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlin.time.Instant
 
 @Serializable
@@ -84,15 +85,8 @@ class ChapterDto(
 
 @Serializable
 class PagesDto(
-    val paginas: List<PageDto>,
+    val paginas: List<JsonElement>,
     val chapterSessionToken: String,
-)
-
-@Serializable
-class PageDto(
-    val pageId: String,
-    val id: String,
-    val index: Int,
 )
 
 @Serializable
@@ -149,6 +143,7 @@ class CapRedeemResponse(
 @Serializable
 class ApiErrorDto(
     val code: String? = null,
+    val retryAfterMs: Long? = null,
 )
 
 @Serializable

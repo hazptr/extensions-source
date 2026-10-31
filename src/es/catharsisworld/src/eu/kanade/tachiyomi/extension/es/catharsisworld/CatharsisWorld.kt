@@ -15,13 +15,14 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
+import keiyoushi.network.Fetch
+import keiyoushi.network.fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstance
 import keiyoushi.utils.firstInstanceOrNull
-import keiyoushi.utils.hmacSha256
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.sha256
 import keiyoushi.utils.toJsonElement
@@ -30,7 +31,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
-import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
@@ -42,7 +42,6 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import java.io.IOException
-import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -53,13 +52,16 @@ abstract class CatharsisWorld : KeiSource() {
 
     private val apiUrl get() = "$baseUrl/api"
 
-    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::pageInterceptor)
-        .addInterceptor(::signatureInterceptor)
-        .rateLimit(50, 1.minutes, 1.seconds) { it.encodedPath.endsWith("/page-ticket") }
-        .rateLimit(3, 1.seconds) { it.host == baseUrl.toHttpUrl().host }
+    // What the site's own API calls send
+    private val apiHeaders get() = headersBuilder()
+        .set("Accept", "application/json, text/plain, */*")
+        .set("System", "catharsis")
+        .set("X-FK-Sistema", "3")
+        .build()
 
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = add("System", "catharsis")
-        .add("X-FK-Sistema", "3")
+    override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::pageInterceptor)
+        .rateLimit(24, 1.minutes, 2.seconds) { it.encodedPath.endsWith("/page-ticket") }
+        .rateLimit(3, 1.seconds) { it.host == baseUrl.toHttpUrl().host }
 
     override suspend fun getPopularManga(page: Int) = searchMangas(page, "", "-n_visitas", null, emptyList())
 
@@ -85,13 +87,13 @@ abstract class CatharsisWorld : KeiSource() {
             status?.let { addQueryParameter("status", it) }
             addQueryParameter("sort", sort)
         }.build()
-        val result = client.get(url).parseAs<MangaListDto>()
+        val result = client.get(url, apiHeaders, Fetch.XHR).parseAs<MangaListDto>()
         return MangasPage(result.data.map { it.toSManga(baseUrl) }, page < result.totalPages)
     }
 
     override val supportsFilterFetching = true
 
-    override suspend fun fetchFilterData(): JsonElement = client.get("$apiUrl/mangas/genres").parseAs<List<GenreDto>>().toJsonElement()
+    override suspend fun fetchFilterData(): JsonElement = client.get("$apiUrl/mangas/genres", apiHeaders, Fetch.XHR).parseAs<List<GenreDto>>().toJsonElement()
 
     override fun getFilterList(data: JsonElement?) = FilterList(
         buildList {
@@ -107,7 +109,7 @@ abstract class CatharsisWorld : KeiSource() {
         if (url.host != baseUrl.toHttpUrl().host) return null
         val segments = url.pathSegments
         if (segments.size < 2 || segments[0] != "manga") return null
-        return client.get("$apiUrl/mangas/${segments[1]}").parseAs<MangaDto>().toSMangaDetails(baseUrl)
+        return client.get("$apiUrl/mangas/${segments[1]}", apiHeaders, Fetch.XHR).parseAs<MangaDto>().toSMangaDetails(baseUrl)
     }
 
     override fun getMangaUrl(manga: SManga) = "$baseUrl/manga/${manga.url}"
@@ -123,7 +125,7 @@ abstract class CatharsisWorld : KeiSource() {
         fetchDetails: Boolean,
         fetchChapters: Boolean,
     ): SMangaUpdate {
-        val dto = client.get("$apiUrl/mangas/${manga.url}").parseAs<MangaDto>()
+        val dto = client.get("$apiUrl/mangas/${manga.url}", apiHeaders, Fetch.XHR).parseAs<MangaDto>()
         return SMangaUpdate(
             dto.toSMangaDetails(baseUrl),
             dto.capitulos
@@ -135,16 +137,18 @@ abstract class CatharsisWorld : KeiSource() {
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val dto = sessionMutex.withLock { openChapter(chapter.url) }
-        return dto.paginas.mapIndexed { i, page ->
+        return List(dto.paginas.size) { i ->
             val url = HttpUrl.Builder()
                 .scheme("http")
                 .host(PAGE_HOST)
                 .addPathSegments(chapter.url)
-                .addQueryParameter("page", page.index.toString())
+                .addQueryParameter("page", i.toString())
                 .build()
             Page(i, imageUrl = url.toString())
         }
     }
+
+    override val imageFetch = Fetch.IMAGE
 
     override fun getImageRequest(page: Page): Request = super.getImageRequest(page).newBuilder()
         .addHeader("X-Catharsis-Reader", "1")
@@ -158,15 +162,19 @@ abstract class CatharsisWorld : KeiSource() {
         val pageIndex = request.url.queryParameter("page")!!.toInt()
         val ticket = try {
             val session = runBlocking { chapterSession(chapterUrl) }
-            mintPageTicket(chain, session, pageIndex)
-                ?: mintPageTicket(chain, runBlocking { chapterSession(chapterUrl, rejected = session) }, pageIndex)
+            mintPageTicket(chain, session, pageIndex, chapterUrl)
+                ?: mintPageTicket(chain, runBlocking { chapterSession(chapterUrl, rejected = session) }, pageIndex, chapterUrl)
                 ?: throw HttpException(401)
         } catch (e: IOException) {
             throw e
         } catch (e: Exception) {
             throw IOException(e.message, e)
         }
-        val response = chain.proceed(request.newBuilder().url("$apiUrl/mangas/pages/${ticket.signedToken}").build())
+        val imageRequest = request.newBuilder()
+            .url("$apiUrl/mangas/pages/${ticket.signedToken}")
+            .fetch(readerFetch(chapterUrl))
+            .build()
+        val response = chain.proceed(imageRequest)
         if (!response.isSuccessful) return response
 
         val body = response.body
@@ -181,7 +189,7 @@ abstract class CatharsisWorld : KeiSource() {
         val bytes = body.bytes()
         val decodedBytes = bytes.xor(ticket.xorByte)
         val bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
-        if (bitmap == null || ticket.scrambleKey == null || bitmap.width < 800 || bitmap.height < 800) {
+        if (bitmap == null || ticket.scrambleKey == null || bitmap.width < 200 || bitmap.height < 200) {
             return response.newBuilder()
                 .body(decodedBytes.toResponseBody(body.contentType()))
                 .build()
@@ -344,10 +352,11 @@ abstract class CatharsisWorld : KeiSource() {
     // Caller holds sessionMutex
     private suspend fun openChapter(chapterUrl: String): PagesDto {
         val url = "$apiUrl/mangas/$chapterUrl"
-        val dto = fetchChapter(url, readerPass())
+        val fetch = readerFetch(chapterUrl)
+        val dto = fetchChapter(url, readerPass(fetch), fetch)
             ?: run {
                 currentReaderPass = null
-                fetchChapter(url, readerPass())
+                fetchChapter(url, readerPass(fetch), fetch)
             }
             ?: throw HttpException(403)
         val token = dto.chapterSessionToken
@@ -362,9 +371,9 @@ abstract class CatharsisWorld : KeiSource() {
     }
 
     // Null when the site asks for a new reader pass
-    private suspend fun fetchChapter(url: String, pass: ReaderPassDto): PagesDto? {
-        val passHeaders = headersBuilder().set("X-Catharsis-Reader-Pass", pass.pass).build()
-        val response = client.get(url, passHeaders, ensureSuccess = false)
+    private suspend fun fetchChapter(url: String, pass: ReaderPassDto, fetch: Fetch): PagesDto? {
+        val passHeaders = apiHeaders.newBuilder().set("X-Catharsis-Reader-Pass", pass.pass).build()
+        val response = client.get(url, passHeaders, fetch, ensureSuccess = false)
         if (response.isSuccessful) return response.parseAs<PagesDto>()
         if (response.code == 401) {
             response.close()
@@ -376,13 +385,23 @@ abstract class CatharsisWorld : KeiSource() {
     }
 
     // Null when the site rejects the session token: expired, or issued to another IP
-    private fun mintPageTicket(chain: Interceptor.Chain, session: ChapterSession, pageIndex: Int): PageTicketResponse? {
+    private fun mintPageTicket(chain: Interceptor.Chain, session: ChapterSession, pageIndex: Int, chapterUrl: String): PageTicketResponse? {
         val request = POST(
             "$apiUrl/mangas/chapters/${session.chapterId}/page-ticket",
-            headers,
+            apiHeaders,
             PageTicketRequest(pageIndex, session.token).toJsonRequestBody(),
-        )
-        val response = chain.proceed(request)
+        ).newBuilder().fetch(readerFetch(chapterUrl)).build()
+        var response = chain.proceed(request)
+        // Waits out READING_TOO_FAST like the site's reader
+        var waited = 0L
+        while (response.code == 429) {
+            val error = response.parseAs<ApiErrorDto>()
+            val delay = (error.retryAfterMs ?: 0) + 150
+            if (error.code != "READING_TOO_FAST" || waited + delay > TICKET_WAIT.inWholeMilliseconds) throw HttpException(429)
+            Thread.sleep(delay)
+            waited += delay
+            response = chain.proceed(request)
+        }
         if (response.code == 401) {
             response.close()
             return null
@@ -395,13 +414,13 @@ abstract class CatharsisWorld : KeiSource() {
     }
 
     // Reader pass from the site's Cap proof-of-work; caller holds sessionMutex
-    private suspend fun readerPass(): ReaderPassDto {
+    private suspend fun readerPass(fetch: Fetch): ReaderPassDto {
         currentReaderPass
             ?.takeIf { Instant.fromEpochMilliseconds(it.expiresAt) > Clock.System.now() + 1.minutes }
             ?.let { return it }
-        val system = client.get("$apiUrl/system").parseAs<SystemDto>()
+        val system = client.get("$apiUrl/system", apiHeaders, fetch).parseAs<SystemDto>()
         val capUrl = system.capApiEndpoint.toHttpUrl()
-        val challenge = client.post(capUrl.resolve("challenge")!!, RequestBody.EMPTY).parseAs<CapChallengeResponse>()
+        val challenge = client.post(capUrl.resolve("challenge")!!, Fetch.XHR, RequestBody.EMPTY).parseAs<CapChallengeResponse>()
         val solutions = (1..challenge.challenge.count).map { i ->
             solveCap(
                 salt = capPrng("${challenge.token}$i", challenge.challenge.saltSize),
@@ -410,12 +429,15 @@ abstract class CatharsisWorld : KeiSource() {
         }
         val redeemed = client.post(
             capUrl.resolve("redeem")!!,
+            Fetch.XHR,
             CapRedeemRequest(challenge.token, solutions).toJsonRequestBody(),
         ).parseAs<CapRedeemResponse>()
         val capToken = redeemed.token?.takeIf { redeemed.success }
             ?: throw Exception("Reader verification failed")
         val response = client.post(
             "$apiUrl/mangas/reader-pass",
+            apiHeaders,
+            fetch,
             ReaderPassRequest(capToken, system.capSitekey).toJsonRequestBody(),
             ensureSuccess = false,
         )
@@ -454,30 +476,11 @@ abstract class CatharsisWorld : KeiSource() {
         else -> HttpException(status)
     }
 
-    private fun signatureInterceptor(chain: Interceptor.Chain): Response {
-        val request = chain.request()
-        if (!request.url.encodedPath.startsWith("/api/")) {
-            return chain.proceed(request)
-        }
-        val timestamp = Clock.System.now().toEpochMilliseconds().toString()
-        val nonce = generateNonce()
-        val signature = "$timestamp:$nonce:${request.method}".hmacSha256(HMAC_KEY.encodeToByteArray()).toHexString()
-        val newRequest = request.newBuilder()
-            .addHeader("x-catharsis-time", timestamp)
-            .addHeader("x-catharsis-nonce", nonce)
-            .addHeader("x-catharsis-sig", signature)
-            .build()
-        return chain.proceed(newRequest)
-    }
-
-    private fun generateNonce(): String {
-        val chars = ('a'..'z') + ('A'..'Z') + ('0'..'9')
-        return (1..16).map { chars[Random.nextInt(chars.size)] }.joinToString("")
-    }
+    private fun readerFetch(chapterUrl: String) = Fetch.XHR.from(getChapterUrl(SChapter.create().apply { url = chapterUrl }))
 
     companion object {
         private const val PAGE_SIZE = 24
-        private const val HMAC_KEY = "4$^£]C8j%La3"
+        private val TICKET_WAIT = 2.minutes
         private const val HEADER_SIZE = 12
         private const val PAGE_HOST = "catharsisworld.invalid"
         private const val FNV_OFFSET_BASIS = -0x7ee3623b
