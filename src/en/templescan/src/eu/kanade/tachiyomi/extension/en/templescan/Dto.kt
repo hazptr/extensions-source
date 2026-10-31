@@ -59,7 +59,7 @@ class SiteChapter(
     val createdAt: Long = 0,
 )
 
-/** A page as the WebView loaded it, with the data the site's app holds for it. */
+/** A page as the WebView loaded it, with the data read from it. */
 @Serializable
 class SitePage(
     val status: Int,

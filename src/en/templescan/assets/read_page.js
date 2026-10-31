@@ -1,14 +1,15 @@
-// The page's status, rendered HTML and the site's own decoded data, found in its React state by shape.
-(kind, settled) => {
+// The page's status, its HTML and, for listings, the site's own decoded data, found in its React state by shape.
+(kind) => {
     const status = performance.getEntriesByType('navigation')[0]?.responseStatus || 200;
     if (window._cf_chl_opt) return { status, cloudflareChallenge: true, html: '', data: null };
     if (status >= 400) return { status, cloudflareChallenge: false, html: '', data: null };
+
+    if (kind === 'pages') return document.readyState === 'complete' ? { status, cloudflareChallenge: false, html: document.documentElement.outerHTML, data: null } : null;
 
     const isObjects = (v, ...keys) => Array.isArray(v) && v.length > 0 && v[0] !== null && typeof v[0] === 'object' && keys.every(k => k in v[0]);
     const shapes = {
         catalog: v => isObjects(v, 'series_slug', 'title', 'total_views'),
         chapters: v => isObjects(v, 'slug', 'createdAt'),
-        pages: v => Array.isArray(v) && v.length > 0 && typeof v[0] === 'string' && v[0].includes('/uploads/'),
     };
     const matches = shapes[kind];
     const html = () => (kind === 'chapters' ? document.documentElement.outerHTML : '');
@@ -38,6 +39,5 @@
             if (found) return { status, cloudflareChallenge: false, html: html(), data: found };
         }
     }
-    // A page that has settled without the data has none, like a locked chapter
-    return settled ? { status, cloudflareChallenge: false, html: html(), data: null } : null;
+    return null;
 }

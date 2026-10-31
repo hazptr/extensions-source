@@ -13,10 +13,14 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
+import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -170,8 +174,10 @@ abstract class TempleScan :
     // =============================== Pages ================================
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val images = pages.get(baseUrl + chapter.url, "pages").data?.parseAs<List<String>>().orEmpty()
-        return images.mapIndexed { idx, url ->
+        val images = pages.get(baseUrl + chapter.url, "pages").document(baseUrl).extractNextJs<List<String>> { element ->
+            element is JsonArray && (element.firstOrNull() as? JsonPrimitive)?.contentOrNull?.contains("/uploads/") == true
+        }
+        return images.orEmpty().mapIndexed { idx, url ->
             Page(idx, imageUrl = url)
         }
     }

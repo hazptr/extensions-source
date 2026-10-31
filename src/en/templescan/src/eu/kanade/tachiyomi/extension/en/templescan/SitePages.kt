@@ -26,7 +26,7 @@ internal class SitePages(baseUrl: String, private val userAgent: () -> String) {
 
     private var failedAt: Long? = null
 
-    /** Loads [url] and reads [kind] (`catalog`, `chapters` or `pages`) from the site's app state. */
+    /** Loads [url] and reads [kind] (`catalog`, `chapters` or `pages`) from the loaded page. */
     suspend fun get(url: String, kind: String): SitePage = mutex.withLock {
         var challenged = false
         val script = asset("read_page.js")
@@ -55,16 +55,12 @@ internal class SitePages(baseUrl: String, private val userAgent: () -> String) {
                     if (polling) return@onPageFinished
                     polling = true
                     // The site's app fills in its state after the page has loaded.
-                    var polls = 0
                     poll(POLL_INTERVAL) {
-                        // Only a reader page can legitimately lack its data (a locked chapter)
-                        val settled = kind == "pages" && POLL_INTERVAL * ++polls >= SETTLE_TIME
                         // Serialized in the page: the WebView writes large numbers in exponent form
-                        evaluateJs("JSON.stringify(($script)(\"$kind\", $settled))") { result ->
+                        evaluateJs("JSON.stringify(($script)(\"$kind\"))") { result ->
                             val page = result.parseAs<String?>()?.parseAs<SitePage?>() ?: return@evaluateJs
                             // Cloudflare's challenge page solves itself and reloads the real one.
                             if (page.cloudflareChallenge) {
-                                polls = 0
                                 onChallenge()
                             } else {
                                 resolve(page)
@@ -105,8 +101,6 @@ internal class SitePages(baseUrl: String, private val userAgent: () -> String) {
         private const val TURNSTILE_HOST = "challenges.cloudflare.com"
 
         private val POLL_INTERVAL = 250.milliseconds
-
-        private val SETTLE_TIME = 10.seconds
 
         private const val SOLVE_MANUALLY = "Open in WebView to pass the site's verification"
 
