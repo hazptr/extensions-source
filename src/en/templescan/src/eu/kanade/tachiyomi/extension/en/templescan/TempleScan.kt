@@ -88,22 +88,12 @@ abstract class TempleScan :
         }
 
         val slug = url.pathSegments.getOrNull(1) ?: return null
-        val mangaUrl = "/comic/$slug"
         val manga = SManga.create().apply {
-            this.url = mangaUrl
+            this.url = "/comic/$slug"
         }
 
-        return getMangaUpdate(manga, emptyList(), fetchDetails = true, fetchChapters = false)
-            .manga
-            .apply {
-                initialized = true
-                this.url = mangaUrl
-            }
+        return getMangaUpdate(manga, emptyList(), fetchDetails = true, fetchChapters = false).manga
     }
-
-    // =========================== Manga Updates ============================
-
-    override fun getMangaUrl(manga: SManga): String = baseUrl + manga.url
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
@@ -112,10 +102,9 @@ abstract class TempleScan :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val slug = manga.url.substringAfterLast('/')
-        val page = pages.get("$baseUrl/comic/$slug", "chapters")
+        val page = pages.get(getMangaUrl(manga), "chapters")
         val details = if (fetchDetails) parseDetails(page.document(baseUrl), slug) else manga
-        val chapterList = if (fetchChapters) parseChapters(page.data!!.parseAs(), slug) else chapters
-        return SMangaUpdate(details, chapterList)
+        return SMangaUpdate(details, parseChapters(page.data!!.parseAs(), slug))
     }
 
     private suspend fun parseDetails(document: Document, slug: String): SManga {
@@ -128,7 +117,7 @@ abstract class TempleScan :
 
         return SManga.create().apply {
             url = "/comic/$slug"
-            title = series?.name ?: catalogEntry?.title ?: slug
+            title = series?.name ?: catalogEntry!!.title
             thumbnail_url = series?.image ?: catalogEntry?.thumbnail
             author = series?.author?.name
             status = when (catalogEntry?.status?.lowercase()) {
@@ -142,13 +131,13 @@ abstract class TempleScan :
                 catalogEntry?.badge?.let { add(it) }
                 if (adult) add("Adult")
                 addAll(genres.filterNot { it.equals("+18", ignoreCase = true) })
-            }.joinToString()
+            }.joinToString().ifEmpty { null }
             description = buildString {
                 append(document.synopsis() ?: series?.description.orEmpty())
                 series?.alternateName?.takeIf { it.isNotBlank() }?.let {
                     append("\n\nAlternative Name: ").append(it)
                 }
-            }
+            }.trim().ifEmpty { null }
         }
     }
 
@@ -171,18 +160,14 @@ abstract class TempleScan :
             }
     }
 
-    // =============================== Pages ================================
-
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val images = pages.get(baseUrl + chapter.url, "pages").document(baseUrl).extractNextJs<List<String>> { element ->
+        val images = pages.get(getChapterUrl(chapter), "pages").document(baseUrl).extractNextJs<List<String>> { element ->
             element is JsonArray && (element.firstOrNull() as? JsonPrimitive)?.contentOrNull?.contains("/uploads/") == true
         }
         return images.orEmpty().mapIndexed { idx, url ->
             Page(idx, imageUrl = url)
         }
     }
-
-    // ============================ Preferences =============================
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
@@ -192,8 +177,6 @@ abstract class TempleScan :
             setDefaultValue(true)
         }.also(screen::addPreference)
     }
-
-    // ============================= Utilities ==============================
 
     private suspend fun fetchCatalog(): List<BrowseSeries> = pages.get("$baseUrl/comics", "catalog").data!!.parseAs()
 
