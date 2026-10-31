@@ -23,6 +23,7 @@ import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstance
 import keiyoushi.utils.firstInstanceOrNull
+import keiyoushi.utils.getLocalStorage
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.sha256
 import keiyoushi.utils.toJsonElement
@@ -356,6 +357,7 @@ abstract class CatharsisWorld : KeiSource() {
 
     // Caller holds sessionMutex
     private suspend fun openChapter(chapterUrl: String): PagesDto {
+        refreshLogin()
         val url = "$apiUrl/mangas/$chapterUrl"
         val fetch = readerFetch(chapterUrl)
         val dto = fetchChapter(url, readerPass(fetch), fetch)
@@ -377,7 +379,7 @@ abstract class CatharsisWorld : KeiSource() {
 
     // Null when the site asks for a new reader pass
     private suspend fun fetchChapter(url: String, pass: ReaderPassDto, fetch: Fetch): PagesDto? {
-        val passHeaders = apiHeaders.newBuilder().set("X-Catharsis-Reader-Pass", pass.pass).build()
+        val passHeaders = readerHeaders.newBuilder().set("X-Catharsis-Reader-Pass", pass.pass).build()
         val response = client.get(url, passHeaders, fetch, ensureSuccess = false)
         if (response.isSuccessful) return response.parseAs<PagesDto>()
         if (response.code == 401) {
@@ -393,7 +395,7 @@ abstract class CatharsisWorld : KeiSource() {
     private fun mintPageTicket(chain: Interceptor.Chain, session: ChapterSession, pageIndex: Int, fetch: Fetch): PageTicketResponse? {
         val request = POST(
             "$apiUrl/mangas/chapters/${session.chapterId}/page-ticket",
-            apiHeaders,
+            readerHeaders,
             PageTicketRequest(pageIndex, session.token).toJsonRequestBody(),
         ).newBuilder().fetch(fetch).build()
         var response = chain.proceed(request)
@@ -424,7 +426,7 @@ abstract class CatharsisWorld : KeiSource() {
         currentReaderPass
             ?.takeIf { Instant.fromEpochMilliseconds(it.expiresAt) > Clock.System.now() + 1.minutes }
             ?.let { return it }
-        val system = client.get("$apiUrl/system", apiHeaders, fetch).parseAs<SystemDto>()
+        val system = client.get("$apiUrl/system", readerHeaders, fetch).parseAs<SystemDto>()
         val capUrl = system.capApiEndpoint.toHttpUrl()
         val challenge = client.post(capUrl.resolve("challenge")!!, Fetch.XHR, RequestBody.EMPTY).parseAs<CapChallengeResponse>()
         val solutions = (1..challenge.challenge.count).map { i ->
@@ -442,7 +444,7 @@ abstract class CatharsisWorld : KeiSource() {
             ?: throw Exception("Reader verification failed")
         val response = client.post(
             "$apiUrl/mangas/reader-pass",
-            apiHeaders,
+            readerHeaders,
             fetch,
             ReaderPassRequest(capToken, system.capSitekey).toJsonRequestBody(),
             ensureSuccess = false,
@@ -481,6 +483,25 @@ abstract class CatharsisWorld : KeiSource() {
         "EARLY_ACCESS" -> Exception("This chapter is still in early access on the site")
         else -> HttpException(status)
     }
+
+    private class Login(val token: String, val expiresAt: Instant)
+
+    @Volatile private var login: Login? = null
+
+    // The site keeps its session in localStorage; caller holds sessionMutex
+    private suspend fun refreshLogin() {
+        val now = Clock.System.now()
+        if (login?.let { it.expiresAt > now + 1.minutes } == true) return
+        // Guests read on when there's no WebView to ask
+        login = runCatching {
+            val token = getLocalStorage(baseUrl, "access_token")?.takeIf { it.isNotEmpty() }
+            val expiresAt = token?.let { getLocalStorage(baseUrl, "expires_at") }?.toLongOrNull()
+            if (token == null || expiresAt == null) null else Login(token, Instant.fromEpochMilliseconds(expiresAt))
+        }.getOrNull()?.takeIf { it.expiresAt > now + 1.minutes }
+    }
+
+    // The reader's calls with the login from the WebView, like the site's client; page images go without
+    private val readerHeaders get() = login?.let { apiHeaders.newBuilder().set("Authorization", "Bearer ${it.token}").build() } ?: apiHeaders
 
     private fun readerFetch(chapterUrl: String) = Fetch.XHR.from(getChapterUrl(SChapter.create().apply { url = chapterUrl }))
 
