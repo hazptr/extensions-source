@@ -34,6 +34,8 @@ abstract class CapibaraTraductor : KeiSource() {
 
     private val baseUrlHost get() = baseUrl.toHttpUrl().host
 
+    private var pageKey: PageKey? = null
+
     override fun OkHttpClient.Builder.configureClient() = apply {
         rateLimit(3) { it.host == baseUrlHost }
         addInterceptor(::authorizationInterceptor)
@@ -166,9 +168,21 @@ abstract class CapibaraTraductor : KeiSource() {
 
         val result = client.get("$baseUrl/api/$seriesPath/chapter/$chapterSlug/pages", getScanHeaders(organizationSlug), Fetch.XHR)
             .parseAs<Data<List<PageDto>>>()
-        return result.data.mapIndexed { i, page ->
-            Page(i, imageUrl = decodePageUrl(page.pg, result.rv!!, i))
-        }
+        val pages = result.data
+        val ls = LsToken(result.ls ?: return emptyList())
+        val seed = fetchPageKey(ls.period).word(ls.period) xor ls.maskedSeed
+        val urls = pages.mapIndexed { i, page -> decodePageUrl(page.ph, seed, i, page.id) }
+        val decoys = result.lh?.let(::decodeDecoyPages).orEmpty()
+
+        return urls.filterIndexed { i, _ -> i !in decoys }
+            .mapIndexed { i, url -> Page(i, imageUrl = url) }
+    }
+
+    private suspend fun fetchPageKey(period: Int): PageKey {
+        pageKey?.takeIf { it.covers(period) }?.let { return it }
+
+        val html = client.get(baseUrl, Fetch.DOCUMENT).body.string()
+        return checkNotNull(findPageKey(html, period)) { "Page key not found" }.also { pageKey = it }
     }
 
     override val supportsRelatedMangas get() = true
