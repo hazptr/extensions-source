@@ -12,29 +12,40 @@ import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.asJsoup
+import keiyoushi.utils.attrOrNull
 import keiyoushi.utils.parseAs
+import keiyoushi.utils.textOrNull
+import keiyoushi.utils.toJsonElement
 import keiyoushi.utils.tryParseDateTime
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 @Source
 abstract class HeavenManga : KeiSource() {
 
     override suspend fun getPopularManga(page: Int): MangasPage {
-        val document = client.get("$baseUrl/top?orderby=views&pages=$page", Fetch.DOCUMENT).asJsoup()
+        val url = baseUrl.toHttpUrl().newBuilder()
+            .addPathSegment("top")
+            .addQueryParameter("orderby", "views")
+            .addQueryParameter("pages", page.toString())
+            .build()
+        val document = client.get(url, Fetch.DOCUMENT).asJsoup()
         return parseMangaGrid(document)
     }
 
     private fun parseMangaGrid(document: Document): MangasPage {
-        val mangas = document.select("div.page-item-detail").map { element ->
+        val mangas = document.select("div.page-item-detail:not(:has(span.book-type:containsOwn(Novela)))").map { element ->
             SManga.create().apply {
-                title = element.select("div.manga-name").text()
-                setUrlWithoutDomain(element.select("a").attr("abs:href"))
-                thumbnail_url = element.select("img").attr("abs:src")
+                title = element.selectFirst("div.manga-name")!!.text()
+                setUrlWithoutDomain(element.selectFirst("a")!!.absUrl("href"))
+                thumbnail_url = element.selectFirst("img")?.attrOrNull("abs:src")
             }
         }
         val hasNextPage = document.selectFirst("ul.pagination a[rel=next]") != null
@@ -42,19 +53,18 @@ abstract class HeavenManga : KeiSource() {
     }
 
     override suspend fun getLatestUpdates(page: Int): MangasPage {
-        val url = if (page == 1) baseUrl else "$baseUrl?pages=$page"
+        val url = baseUrl.toHttpUrl().newBuilder()
+            .apply { if (page > 1) addQueryParameter("pages", page.toString()) }
+            .build()
         val document = client.get(url, Fetch.DOCUMENT).asJsoup()
 
         val mangas = document.selectFirst("div.col-lg-8 > div#loop-content")
             ?.select("div.list-group-item:not(:has(div:containsOwn(Novela)))")
             ?.map { element ->
+                val link = element.selectFirst("a")!!
                 SManga.create().apply {
-                    with(element.selectFirst("a")!!) {
-                        val mangaUrl = attr("abs:href").substringBeforeLast("/")
-                        setUrlWithoutDomain(mangaUrl)
-                        title = selectFirst(".captitle")?.text() ?: text()
-                        thumbnail_url = mangaUrl.replace("/manga/", "/uploads/manga/") + "/cover/cover_250x350.jpg"
-                    }
+                    this.url = "/manga/" + link.absUrl("href").toHttpUrl().pathSegments[1]
+                    title = link.selectFirst(".captitle")?.text() ?: link.text()
                 }
             }
             ?.distinctBy { it.url }
@@ -66,38 +76,26 @@ abstract class HeavenManga : KeiSource() {
     }
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
+        if (query.isBlank() && filters.none { it is UriPartFilter && it.state != 0 }) return getPopularManga(page)
+
         val url = baseUrl.toHttpUrl().newBuilder()
         if (query.isNotBlank()) {
-            if (query.length < 3) throw Exception("La búsqueda debe tener al menos 3 caracteres")
+            if (query.length < 3) throw Exception("Search needs at least 3 characters")
             url.addPathSegment("buscar")
                 .addQueryParameter("query", query)
         } else {
-            val ext = ".html"
-            var name: String
             filters.forEach { filter ->
                 when (filter) {
-                    is GenreFilter -> {
-                        if (filter.toUriPart().isNotBlank() && filter.state != 0) {
-                            name = filter.toUriPart()
-                            url.addPathSegment("genero")
-                                .addPathSegment(name + ext)
-                        }
+                    is GenreFilter -> if (filter.state != 0) {
+                        url.addPathSegment("genero").addPathSegment(filter.toUriPart() + ".html")
                     }
 
-                    is AlphabeticoFilter -> {
-                        if (filter.toUriPart().isNotBlank() && filter.state != 0) {
-                            name = filter.toUriPart()
-                            url.addPathSegment("letra")
-                                .addPathSegment("manga$ext")
-                                .addQueryParameter("alpha", name)
-                        }
+                    is AlphabeticoFilter -> if (filter.state != 0) {
+                        url.addPathSegments("letra/manga.html").addQueryParameter("alpha", filter.toUriPart())
                     }
 
-                    is ListaCompletasFilter -> {
-                        if (filter.toUriPart().isNotBlank() && filter.state != 0) {
-                            name = filter.toUriPart()
-                            url.addPathSegment(name)
-                        }
+                    is ListaCompletasFilter -> if (filter.state != 0) {
+                        url.addPathSegment(filter.toUriPart())
                     }
 
                     else -> {}
@@ -107,24 +105,46 @@ abstract class HeavenManga : KeiSource() {
 
         if (page > 1) url.addQueryParameter("pages", page.toString())
 
-        val requestUrl = url.build()
-        val document = client.get(requestUrl, Fetch.DOCUMENT).asJsoup()
+        val document = client.get(url.build(), Fetch.DOCUMENT).asJsoup()
 
-        if (!requestUrl.pathSegments.contains("buscar")) {
+        if (query.isBlank()) {
             return parseMangaGrid(document)
         }
 
-        val mangas = document.select("div.c-tabs-item__content").map { element ->
+        // Result cards sit inside an outer div with the same class
+        val mangas = document.select("div.c-tabs-item__content:has(> div > div.tab-thumb)").map { element ->
             SManga.create().apply {
-                element.select("h4 a").let {
+                element.selectFirst("h4 a")!!.let {
                     title = it.text()
-                    setUrlWithoutDomain(it.attr("abs:href"))
+                    setUrlWithoutDomain(it.absUrl("href"))
                 }
-                thumbnail_url = element.select("img").attr("abs:data-src")
+                thumbnail_url = element.selectFirst("img")?.attrOrNull("abs:data-src")
             }
         }
         val hasNextPage = document.selectFirst("ul.pagination a[rel=next]") != null
         return MangasPage(mangas, hasNextPage)
+    }
+
+    override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
+        if (url.host != baseUrl.toHttpUrl().host) return null
+        val segments = url.pathSegments.filter { it.isNotEmpty() }
+        if (segments.firstOrNull() != "manga") return null
+        val slug = when (segments.getOrNull(1)) {
+            null, "leer" -> return null
+            // Feed links are /manga/ver/<slug>/<chapter>, reader links /manga/ver/<chapter id>
+            "ver" -> when {
+                segments.size < 3 -> return null
+
+                segments.size == 3 -> client.get(url, Fetch.DOCUMENT).asJsoup()
+                    .selectFirst("a.endReadingButtons")?.absUrl("href")?.toHttpUrl()?.pathSegments?.getOrNull(1)
+                    ?: return null
+
+                else -> segments[2]
+            }
+            else -> segments[1]
+        }
+        val manga = SManga.create().apply { this.url = "/manga/$slug" }
+        return getMangaUpdate(manga, emptyList(), fetchDetails = true, fetchChapters = false).manga
     }
 
     override suspend fun fetchMangaUpdate(
@@ -141,18 +161,20 @@ abstract class HeavenManga : KeiSource() {
 
     private suspend fun fetchDetails(manga: SManga): SManga {
         val document = client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
-        return SManga.create().apply {
-            title = manga.title
-            document.select("div.tab-summary").let { info ->
-                genre = info.select("div.genres-content a").joinToString { it.text() }
-                thumbnail_url = info.select("div.summary_image img").attr("abs:data-src")
-            }
-            description = document.select("div.description-summary p").text()
+        return manga.apply {
+            title = document.selectFirst("div.post-title .manga-title")!!.text()
+            genre = (listOfNotNull(document.summaryField("Type")) + document.select("div.genres-content a").eachText())
+                .joinToString().ifEmpty { null }
+            thumbnail_url = document.selectFirst("div.summary_image img")?.attrOrNull("abs:data-src")
+            val synopsis = document.selectFirst("div.description-summary p")?.wholeText()
+                ?.lines()?.map { it.trim() }?.filter { it.isNotEmpty() }?.joinToString("\n\n")?.ifEmpty { null }
+            val altTitles = document.summaryField("Titulo Alt")?.let { "**Títulos alternativos:** $it" }
+            description = listOfNotNull(synopsis, altTitles).joinToString("\n\n").ifEmpty { null }
         }
     }
 
     private suspend fun fetchChapterList(manga: SManga): List<SChapter> {
-        val mangaUrl = (baseUrl + manga.url).toHttpUrl()
+        val mangaUrl = getMangaUrl(manga).toHttpUrl()
         val url = mangaUrl.newBuilder()
             .addQueryParameter("columns[0][data]", "number")
             .addQueryParameter("columns[0][orderable]", "true")
@@ -168,49 +190,67 @@ abstract class HeavenManga : KeiSource() {
             .add("X-Requested-With", "XMLHttpRequest")
             .build()
 
-        val result = client.get(url, headers, Fetch.XHR).parseAs<PayloadChaptersDto>()
+        val result = client.get(url, headers, Fetch.XHR.from(mangaUrl)).parseAs<PayloadChaptersDto>()
         val chapterBaseUrl = mangaUrl.toString().removeSuffix("/")
 
         return result.data
-            .sortedByDescending { it.slug.toFloatOrNull() ?: 0f }
             .map {
+                val row = Jsoup.parseBodyFragment(it.numberHtml)
                 SChapter.create().apply {
-                    name = "Capítulo: ${it.slug}"
+                    name = row.selectFirst("h3")!!.text()
+                    scanlator = row.selectFirst("span.greenSpan")?.textOrNull()
                     setUrlWithoutDomain("$chapterBaseUrl/${it.slug}#${it.id}")
-                    date_upload = dateFormat.tryParseDateTime(it.createdAt)
+                    date_upload = dateFormat.tryParseDateTime(it.createdAt, ZoneOffset.UTC)
                 }
             }
+            .sortedByDescending { CHAPTER_NUMBER_REGEX.find(it.name)?.value?.toFloatOrNull() ?: -1f }
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val chapterId = chapter.url.substringAfterLast("#")
-        if (chapterId.isBlank()) throw Exception("Error al obtener el id del capítulo. Actualice la lista")
+        val chapterUrl = getChapterUrl(chapter)
+        val chapterId = chapterUrl.toHttpUrl().fragment
+            ?: throw Exception("Chapter id missing, refresh the chapter list")
 
-        val document = client.get("$baseUrl/manga/ver/$chapterId", Fetch.DOCUMENT.from(getChapterUrl(chapter))).asJsoup()
-        val data = document.selectFirst("script:containsData(pUrl)")?.data()
-            ?: throw Exception("Script pages no encontrado")
-        val jsonString = PAGES_REGEX.find(data)?.groupValues?.get(1)?.removeTrailingComma()
-            ?: throw Exception("No se pudo extraer el JSON de las páginas")
+        val document = client.get("$baseUrl/manga/ver/$chapterId", Fetch.DOCUMENT.from(chapterUrl)).asJsoup()
+        val jsonString = document.selectFirst("script:containsData(pUrl)")?.data()
+            ?.let { PAGES_REGEX.find(it)?.groupValues?.get(1) }
+            ?.removeTrailingComma()
+            ?: throw Exception("Page list not found")
 
         val pages = jsonString.parseAs<List<PageDto>>()
         return pages.mapIndexed { i, dto -> Page(i, imageUrl = dto.imgURL) }
     }
 
+    override val supportsFilterFetching = true
+
+    override suspend fun fetchFilterData(): JsonElement = client.get("$baseUrl/top", Fetch.DOCUMENT).asJsoup()
+        .select("div.widget-content a[href*=/genero/]")
+        .map { GenreDto(it.text(), it.absUrl("href").toHttpUrl().pathSegments.last().removeSuffix(".html")) }
+        .filter { it.slug != "novela" }
+        .toJsonElement()
+
     override fun getFilterList(data: JsonElement?) = FilterList(
-        Filter.Header("NOTA: Los filtros se ignoran si se utiliza la búsqueda de texto."),
-        Filter.Header("Sólo se puede utilizar un filtro a la vez."),
-        Filter.Separator(),
-        GenreFilter(),
-        AlphabeticoFilter(),
-        ListaCompletasFilter(),
+        listOfNotNull(
+            Filter.Header("NOTA: Los filtros se ignoran si se utiliza la búsqueda de texto."),
+            Filter.Header("Sólo se puede utilizar un filtro a la vez."),
+            Filter.Separator(),
+            data?.parseAs<List<GenreDto>>()?.let(::GenreFilter),
+            AlphabeticoFilter(),
+            ListaCompletasFilter(),
+        ),
     )
+
+    private fun Document.summaryField(heading: String): String? = selectFirst("div.post-content_item:has(div.summary-heading h5:containsOwn($heading)) div.summary-content")
+        ?.textOrNull()
+        ?.takeUnless { it == "Desconocido" }
 
     private fun String.removeTrailingComma() = replace(TRAILING_COMMA_REGEX, "$1")
 
     companion object {
         private val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-        val PAGES_REGEX = """pUrl\s*=\s*(\[[\s\S]*?\])\s*;""".toRegex()
-        val TRAILING_COMMA_REGEX = """,\s*(\}|\])""".toRegex()
+        private val PAGES_REGEX = """pUrl\s*=\s*(\[[\s\S]*?\])\s*;""".toRegex()
+        private val TRAILING_COMMA_REGEX = """,\s*(\}|\])""".toRegex()
+        private val CHAPTER_NUMBER_REGEX = """\d+(\.\d+)?""".toRegex()
         private const val CHAPTER_LIST_LIMIT = 10000
     }
 }

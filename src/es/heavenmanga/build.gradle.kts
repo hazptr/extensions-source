@@ -14,4 +14,8 @@ keiyoushi {
         lang = "es"
         baseUrl = "https://heavenmanga.com"
     }
+
+    deeplink {
+        path("/manga/..*")
+    }
 }

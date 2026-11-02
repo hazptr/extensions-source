@@ -12,10 +12,17 @@ class PayloadChaptersDto(
 class ChapterDto(
     val id: Int,
     val slug: String,
+    @SerialName("number") val numberHtml: String,
     @SerialName("created_at") val createdAt: String? = null,
 )
 
 @Serializable
 class PageDto(
     val imgURL: String,
+)
+
+@Serializable
+class GenreDto(
+    val name: String,
+    val slug: String,
 )
