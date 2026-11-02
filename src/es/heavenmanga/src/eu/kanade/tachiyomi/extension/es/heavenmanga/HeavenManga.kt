@@ -186,7 +186,7 @@ abstract class HeavenManga : KeiSource() {
         val chapterId = chapter.url.substringAfterLast("#")
         if (chapterId.isBlank()) throw Exception("Error al obtener el id del capítulo. Actualice la lista")
 
-        val document = client.get("$baseUrl/manga/leer/$chapterId", Fetch.DOCUMENT).asJsoup()
+        val document = client.get("$baseUrl/manga/ver/$chapterId", Fetch.DOCUMENT.from(getChapterUrl(chapter))).asJsoup()
         val data = document.selectFirst("script:containsData(pUrl)")?.data()
             ?: throw Exception("Script pages no encontrado")
         val jsonString = PAGES_REGEX.find(data)?.groupValues?.get(1)?.removeTrailingComma()
