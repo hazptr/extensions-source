@@ -24,3 +24,7 @@ keiyoushi {
         }
     }
 }
+
+dependencies {
+    implementation(project(":lib:webview"))
+}

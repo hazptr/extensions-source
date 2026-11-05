@@ -22,3 +22,7 @@ keiyoushi {
         path("/manga/..*")
     }
 }
+
+dependencies {
+    implementation(project(":lib:webview"))
+}
