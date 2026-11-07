@@ -44,7 +44,6 @@ class SeriesDto(
     private val originalLanguage: String? = null,
     private val status: String? = null,
     private val tags: List<String> = emptyList(),
-    private val spoilerTags: List<String> = emptyList(),
     private val authors: List<String> = emptyList(),
     private val description: String? = null,
     private val titles: TitlesDto? = null,
@@ -61,14 +60,13 @@ class SeriesDto(
 ) {
     val isEnglishOriginal get() = originalLanguage == "en"
 
-    fun toSManga(baseUrl: String, showSpoilerTags: Boolean) = SManga.create().apply {
+    fun toSManga(baseUrl: String) = SManga.create().apply {
         url = "/title/$hid"
         title = this@SeriesDto.title
         // The size the site's own title page shows
         thumbnail_url = cover?.let { "$baseUrl$it".toHttpUrl() }?.let { it.newBuilder().setPathSegment(it.pathSize - 1, "720.webp").build().toString() }
         author = authors.joinToString().ifEmpty { null }
-        val shownTags = if (showSpoilerTags) tags else tags - spoilerTags.toSet()
-        genre = (listOfNotNull(type, shownTags.firstOrNull(DEMOGRAPHICS::contains)) + shownTags).distinct().joinToString().ifEmpty { null }
+        genre = (listOfNotNull(type, tags.firstOrNull(DEMOGRAPHICS::contains)) + tags).distinct().joinToString().ifEmpty { null }
         status = when (this@SeriesDto.status) {
             "Ongoing" -> SManga.ONGOING
             "Complete" -> SManga.COMPLETED
@@ -78,7 +76,7 @@ class SeriesDto(
         }
     }
 
-    fun toSMangaDetails(baseUrl: String, showSpoilerTags: Boolean, showAdult: Boolean, mangabaka: MangabakaDto) = toSManga(baseUrl, showSpoilerTags).apply {
+    fun toSMangaDetails(baseUrl: String, showAdult: Boolean, mangabaka: MangabakaDto) = toSManga(baseUrl).apply {
         val sources = mangabaka.sources
         description = MarkdownDescription.Builder().apply {
             rating(score?.div(10.0))

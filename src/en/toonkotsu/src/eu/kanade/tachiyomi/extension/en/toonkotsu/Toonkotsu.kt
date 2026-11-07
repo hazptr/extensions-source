@@ -53,8 +53,6 @@ abstract class Toonkotsu :
 
     private val showAdult get() = preferences.getBoolean(PREF_ADULT, false)
 
-    private val showSpoilerTags get() = preferences.getBoolean(PREF_SPOILER_TAGS, false)
-
     override val supportsFilterFetching = true
 
     override val supportsRelatedMangas = true
@@ -72,7 +70,7 @@ abstract class Toonkotsu :
             applyContentPreferences()
         }.build()
         val data = client.get(url, Fetch.XHR).parseAs<LatestDto>()
-        val mangas = data.items.map { it.series }.distinctBy { it.hid }.map { it.toSManga(baseUrl, showSpoilerTags) }
+        val mangas = data.items.map { it.series }.distinctBy { it.hid }.map { it.toSManga(baseUrl) }
         return MangasPage(mangas, data.hasNextPage)
     }
 
@@ -111,7 +109,7 @@ abstract class Toonkotsu :
             applyContentPreferences()
         }.build()
         val data = client.get(url, Fetch.XHR).parseAs<BrowseDto>()
-        return MangasPage(data.items.map { it.toSManga(baseUrl, showSpoilerTags) }, data.hasNextPage)
+        return MangasPage(data.items.map { it.toSManga(baseUrl) }, data.hasNextPage)
     }
 
     // Like the site's own language and tag settings: a search's own language wins, excluded tags add up and match any
@@ -144,7 +142,7 @@ abstract class Toonkotsu :
                     if (!showAdult) addQueryParameter("sfw", "1")
                 }.build()
                 val data = client.get(groupUrl, Fetch.XHR).parseAs<GroupPageDto>()
-                MangasPage(data.items.map { it.toSManga(baseUrl, showSpoilerTags) }, data.hasNextPage)
+                MangasPage(data.items.map { it.toSManga(baseUrl) }, data.hasNextPage)
             }
             else -> super.getMangasByUrl(url, page)
         }
@@ -171,8 +169,8 @@ abstract class Toonkotsu :
         val covers = if (fetchDetails && englishCovers) async { fetchCovers(hid) } else null
         val data = client.get("$baseUrl/cdn/v1/series/$hid", Fetch.XHR).parseAs<SeriesResponse>()
         // Without details the description stays null, which the app keeps as stored
-        val details = mangabaka?.let { data.series.toSMangaDetails(baseUrl, showSpoilerTags, showAdult, it.await()) }
-            ?: data.series.toSManga(baseUrl, showSpoilerTags)
+        val details = mangabaka?.let { data.series.toSMangaDetails(baseUrl, showAdult, it.await()) }
+            ?: data.series.toSManga(baseUrl)
         // Null keeps the stored cover on a chapters-only refresh
         if (englishCovers && !data.series.isEnglishOriginal) {
             details.thumbnail_url = covers?.await()?.earliestEnglishUrl(baseUrl) ?: details.thumbnail_url.takeIf { fetchDetails }
@@ -249,7 +247,7 @@ abstract class Toonkotsu :
 
     override suspend fun fetchRelatedMangaList(manga: SManga): List<SManga> {
         val hid = getMangaUrl(manga).toHttpUrl().pathSegments[1]
-        return client.get("$baseUrl/cdn/v1/series/$hid", Fetch.XHR).parseAs<SeriesResponse>().recs.map { it.toSManga(baseUrl, showSpoilerTags) }
+        return client.get("$baseUrl/cdn/v1/series/$hid", Fetch.XHR).parseAs<SeriesResponse>().recs.map { it.toSManga(baseUrl) }
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
@@ -415,19 +413,11 @@ abstract class Toonkotsu :
             summary = "From the site's Covers tab"
             setDefaultValue(false)
         }.let(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_SPOILER_TAGS
-            title = "Show spoiler tags"
-            summary = "Include tags the site marks as spoilers in the genres"
-            setDefaultValue(false)
-        }.let(screen::addPreference)
     }
 
     companion object {
         private const val PREF_ADULT = "show_hentai"
         private const val PREF_DEDUPLICATE_CHAPTERS = "pref_deduplicate_chapters"
-        private const val PREF_SPOILER_TAGS = "pref_spoiler_tags"
         private const val PREF_CHAPTER_NAMES = "pref_chapter_names"
         private const val PREF_LANGUAGES = "pref_original_languages"
         private const val PREF_EXCLUDED_TAGS = "pref_excluded_tags"

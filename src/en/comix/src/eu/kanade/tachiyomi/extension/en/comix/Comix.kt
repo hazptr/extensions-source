@@ -465,7 +465,6 @@ abstract class Comix :
         preferences.alternativeNamesInDescription(),
         preferences.scorePosition(),
         preferences.showExtraInfo(),
-        preferences.showTagsInGenres(),
     )
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/title${manga.url}"
@@ -1005,16 +1004,6 @@ abstract class Comix :
             setDefaultValue(true)
         }.let(screen::addPreference)
 
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_SHOW_TAGS_IN_GENRES
-            title = "Show tags in genre chips"
-            summary = "Include the site's narrative tag list (e.g. Demons, " +
-                "Vampires, Time Travel) alongside the curated genres in the " +
-                "manga details. Off by default — the curated set matches what " +
-                "the site itself shows on the page."
-            setDefaultValue(false)
-        }.let(screen::addPreference)
-
         ListPreference(screen.context).apply {
             key = PREF_SCORE_POSITION
             title = "Score display position"
@@ -1044,8 +1033,6 @@ abstract class Comix :
     private fun SharedPreferences.scorePosition() = getString(PREF_SCORE_POSITION, "top") ?: "top"
 
     private fun SharedPreferences.showExtraInfo() = getBoolean(PREF_SHOW_EXTRA_INFO, true)
-
-    private fun SharedPreferences.showTagsInGenres() = getBoolean(PREF_SHOW_TAGS_IN_GENRES, false)
 
     private fun SharedPreferences.defaultTypes(): Set<String> {
         val all = Filters.getTypes().map { it.second }.toSet()
@@ -1083,7 +1070,6 @@ abstract class Comix :
         private const val PREF_SCANLATOR_BLACKLIST = "pref_scanlator_blacklist"
         private const val ALTERNATIVE_NAMES_IN_DESCRIPTION = "pref_alt_names_in_description"
         private const val PREF_SHOW_EXTRA_INFO = "pref_show_extra_info"
-        private const val PREF_SHOW_TAGS_IN_GENRES = "pref_show_tags_in_genres"
         private const val PREF_SCORE_POSITION = "pref_score_position"
         private const val PREF_SOLVE_CAPTCHA = "pref_solve_captcha"
 

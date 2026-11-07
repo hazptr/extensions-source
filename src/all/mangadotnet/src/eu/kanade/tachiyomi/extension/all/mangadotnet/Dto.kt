@@ -195,7 +195,7 @@ class Manga(
         private val listRegex = Regex("\n\n(-|•|\\d+\\.)")
     }
 
-    fun toSManga(baseUrl: String, showTags: Boolean = true, extraVolumeCount: Int? = null) = SManga.create().apply {
+    fun toSManga(baseUrl: String, extraVolumeCount: Int? = null) = SManga.create().apply {
         url = id.toString()
         title = this@Manga.title
         thumbnail_url = photo?.let {
@@ -221,12 +221,10 @@ class Manga(
                 "EN" -> add("OEL")
             }
             this@Manga.genres.forEach { add(it.trim()) }
-            if (showTags) {
-                this@Manga.tags.flatMap { it.tags }
-                    .map { it.name.trim() }
-                    .sortedBy { it.lowercase() }
-                    .forEach { add(it) }
-            }
+            this@Manga.tags.flatMap { it.tags }
+                .map { it.name.trim() }
+                .sortedBy { it.lowercase() }
+                .forEach { add(it) }
         }.joinToString()
         status = when {
             else -> when (this@Manga.status?.lowercase()) {

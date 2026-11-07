@@ -108,7 +108,7 @@ class InitialMangaDto(
     private val altNames: List<EntityDto>? = null,
     private val trackers: List<TrackerDto>? = null,
 ) {
-    fun toSManga(mangaUrl: String = url, includeTags: Boolean = true) = SManga.create().apply {
+    fun toSManga(mangaUrl: String = url) = SManga.create().apply {
         url = mangaUrl
         title = name
         thumbnail_url = cover
@@ -116,10 +116,7 @@ class InitialMangaDto(
         artist = artists.orEmpty().joinToString { it.name }.ifEmpty { null }
         genre = buildList {
             type?.name?.takeIf { it != "other" }?.let { add(it.replaceFirstChar(Char::uppercase)) }
-            addAll((demographics.orEmpty() + formats.orEmpty() + genres.orEmpty()).map { it.name })
-            if (includeTags) {
-                addAll(tags.orEmpty().map { it.name })
-            }
+            addAll((demographics.orEmpty() + formats.orEmpty() + genres.orEmpty() + tags.orEmpty()).map { it.name })
         }.distinctBy { it.lowercase() }.joinToString().ifEmpty { null }
         status = when (this@InitialMangaDto.status?.lowercase()) {
             "ongoing" -> SManga.ONGOING

@@ -483,7 +483,7 @@ abstract class MangaDot :
             if (fetchDetails) {
                 val url = "$baseUrl/manga/${manga.url}.data?_routes=pages/MangaDetailPage".toHttpUrl()
                 val data = client.get(url, Fetch.XHR).use { it.decodeRscAs<Data<MangaData>>().data }
-                data.mangaData.manga.toSManga(baseUrl, showTagsPref(), data.mangaData.volumeCount)
+                data.mangaData.manga.toSManga(baseUrl, data.mangaData.volumeCount)
             } else {
                 manga
             }
@@ -739,8 +739,6 @@ abstract class MangaDot :
     private fun browseStatusPref(): String? = preferences.getString(BROWSE_STATUS_PREF, "")
         ?.takeIf { it != "" }
 
-    private fun showTagsPref() = preferences.getBoolean(SHOW_TAGS_PREF, true)
-
     // ============================= Bookmarks =============================
     private fun parseBookmarksResponse(response: Response): MangasPage = try {
         val decoded = response.decodeRsc()
@@ -833,14 +831,6 @@ abstract class MangaDot :
             summary = "Applies to Popular & Latest."
         }
         screen.addPreference(browseStatusPref)
-
-        val showTagsPref = SwitchPreferenceCompat(screen.context).apply {
-            key = SHOW_TAGS_PREF
-            title = "Show Tags In Details"
-            summary = "Show tags after genres in manga details."
-            setDefaultValue(true)
-        }
-        screen.addPreference(showTagsPref)
 
         val chapterModePref = ListPreference(screen.context).apply {
             key = CHAPTER_MODE
@@ -1000,4 +990,3 @@ private const val DEDUPLICATE_CHAPTERS = "pref_deduplicate_chapters"
 private const val PREFERRED_SCANLATORS = "pref_preferred_scanlators"
 private const val EXCLUDE_DEMOGRAPHIC_PREF = "pref_exclude_demographic"
 private const val CONTENT_RATING_PREF = "pref_content_rating"
-private const val SHOW_TAGS_PREF = "pref_show_tags"

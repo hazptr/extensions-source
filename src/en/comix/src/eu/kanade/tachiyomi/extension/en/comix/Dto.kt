@@ -86,7 +86,6 @@ class Manga(
         altTitlesInDesc: Boolean = false,
         scorePosition: String,
         showExtraInfo: Boolean = true,
-        showTags: Boolean = false,
     ) = SManga.create().apply {
         url = this@Manga.url?.substringAfter("/title") ?: "/$hid"
         memo = buildJsonObject { put(MANGA_ID_MEMO, hid) }
@@ -122,7 +121,7 @@ class Manga(
             else -> SManga.UNKNOWN
         }
         thumbnail_url = this@Manga.poster?.from(baseUrl, posterQuality)
-        genre = getGenres(showTags)
+        genre = getGenres()
     }
 
     fun toBasicSManga(baseUrl: HttpUrl, posterQuality: String?) = SManga.create().apply {
@@ -147,8 +146,7 @@ class Manga(
         return known + unknown
     }
 
-    // Tags are separate from the curated genres in the site's detail UI.
-    private fun getGenres(showTags: Boolean) = buildList {
+    private fun getGenres() = buildList {
         when (type) {
             "manhwa" -> add("Manhwa")
             "manhua" -> add("Manhua")
@@ -157,7 +155,7 @@ class Manga(
         }
         (genres ?: genreOld)?.map { it.title }?.let { addAll(it) }
         (demographics ?: demographicOld)?.map { it.title }?.let { addAll(it) }
-        if (showTags) tags?.map { it.title }?.let { addAll(it) }
+        tags?.map { it.title }?.let { addAll(it) }
         if (contentRating == "erotica" || contentRating == "pornographic") add("NSFW")
     }.distinct().joinToString()
 }
