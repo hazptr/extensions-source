@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.multisrc.inkstory
 
-import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -16,6 +15,7 @@ import keiyoushi.network.Fetch
 import keiyoushi.network.XorInterceptor
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
+import keiyoushi.source.ChapterUploadPreferences
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferencesLazy
@@ -45,12 +45,20 @@ abstract class InkStory :
         val legacyKeys = listOf(PREF_LEGACY_BRANCH_MODE, PREF_LEGACY_BRANCH_QUERY, "inkstory_image_quality", "inkstory_image_type", "inkstory_image_width")
         if (legacyKeys.any(::contains)) {
             edit().apply {
-                if (mode == "latest" || mode == "preferred") putBoolean(PREF_DEDUPE, true)
-                if (mode == "preferred" && !query.isNullOrBlank()) putString(PREF_PREFERRED_GROUPS, query)
+                if (mode == "latest" || mode == "preferred") putBoolean(PREF_LEGACY_DEDUPE, true)
+                if (mode == "preferred" && !query.isNullOrBlank()) putString(PREF_LEGACY_PREFERRED_GROUPS, query)
                 legacyKeys.forEach(::remove)
             }.apply()
         }
+        ChapterUploadPreferences.migrate(
+            this,
+            dedupeSwitchKey = PREF_LEGACY_DEDUPE,
+            preferredGroupsKey = PREF_LEGACY_PREFERRED_GROUPS,
+            blockedGroupsKey = PREF_LEGACY_BLOCKED_GROUPS,
+        )
     }
+
+    private val chapterUploads by lazy { ChapterUploadPreferences(preferences, chapterUploadStrings) }
 
     override fun Headers.Builder.configureHeaders(): Headers.Builder = apply {
         // User Agent required by source. Don't change
@@ -148,26 +156,19 @@ abstract class InkStory :
     }
 
     private suspend fun getChapters(slug: String, bookId: String): List<SChapter> {
-        val blocked = prefBlockedGroups
         val chapterList = serverFn<ChapterListDto>(FN_CHAPTERS, bookId.toJsonElement())
-        val chapters = chapterList.chapters.filter { chapter -> chapter.groups().none { it in blocked } }
-        val shown = if (prefDedupe) {
-            val preferred = prefPreferredGroups
-            val branchOrder = chapterList.branches.withIndex().associate { it.value.id to it.index }
-            chapters.groupBy { it.key }.values.map { uploads ->
-                preferred.firstNotNullOfOrNull { group -> uploads.firstOrNull { group in it.groups() } }
-                    ?: uploads.minBy { branchOrder[it.branchId] ?: Int.MAX_VALUE }
-            }
-        } else {
-            chapters
-        }
+        val branchOrder = chapterList.branches.withIndex().associate { it.value.id to it.index }
+        val shown = chapterUploads.select(
+            chapterList.chapters,
+            chapter = { it.key },
+            groups = { it.publisherNames.orEmpty().split(',') },
+            rank = compareBy { branchOrder[it.branchId] ?: Int.MAX_VALUE },
+        )
         val list = shown.map { it.toSChapter(slug) }
         if (!prefDelay) return list
         val hideAfter = Clock.System.now().minus(4.days).toEpochMilliseconds()
         return list.filter { it.date_upload <= hideAfter }
     }
-
-    private fun ChapterDto.groups() = publisherNames.orEmpty().split(',').map { it.trim().lowercase() }
 
     override fun getChapterUrl(chapter: SChapter): String = "$baseUrl/content/${chapter.memo["slug"]!!.string}/${chapter.url}"
 
@@ -217,13 +218,8 @@ abstract class InkStory :
         )
     }
 
-    private val prefDedupe get() = preferences.getBoolean(PREF_DEDUPE, false)
-    private val prefPreferredGroups get() = preferences.getString(PREF_PREFERRED_GROUPS, "")!!.groupList()
-    private val prefBlockedGroups get() = preferences.getString(PREF_BLOCKED_GROUPS, "")!!.groupList().toSet()
     private val prefDelay get() = preferences.getBoolean(PREF_DELAY, false)
     private val prefTitleLanguage get() = preferences.getString(PREF_TITLE_LANGUAGE, "ru")!!
-
-    private fun String.groupList() = split(',').map { it.trim().lowercase() }.filter(String::isNotEmpty)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         ListPreference(screen.context).apply {
@@ -235,34 +231,7 @@ abstract class InkStory :
             setDefaultValue("ru")
         }.let(screen::addPreference)
 
-        val preferredGroups = EditTextPreference(screen.context).apply {
-            key = PREF_PREFERRED_GROUPS
-            title = "Предпочитаемые команды"
-            dialogTitle = title
-            summary = "Через запятую, по порядку. Если ни одной нет, остаётся ветка, которую сайт показывает первой"
-            setDefaultValue("")
-        }
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_DEDUPE
-            title = "Одна версия каждой главы"
-            summaryOff = "Главы всех команд"
-            summaryOn = "Одна глава на номер, по предпочитаемым командам"
-            setDefaultValue(false)
-            setOnPreferenceChangeListener { _, value ->
-                preferredGroups.setEnabled(value as Boolean)
-                true
-            }
-        }.let(screen::addPreference)
-        preferredGroups.setEnabled(prefDedupe)
-        screen.addPreference(preferredGroups)
-
-        EditTextPreference(screen.context).apply {
-            key = PREF_BLOCKED_GROUPS
-            title = "Скрытые команды"
-            dialogTitle = title
-            summary = "Через запятую. Главы этих команд не показываются"
-            setDefaultValue("")
-        }.let(screen::addPreference)
+        chapterUploads.setupPreferenceScreen(screen)
 
         SwitchPreferenceCompat(screen.context).apply {
             key = PREF_DELAY
@@ -294,9 +263,9 @@ abstract class InkStory :
         private val READING_RESTRICTIONS = listOf("NONE", "AUTHORIZED_ONLY", "LIBRARY_ONLY")
         private val IMAGE_KEY = "UySkp0BzPhwlvP2V".toByteArray()
 
-        private const val PREF_DEDUPE = "inkstory_one_per_chapter"
-        private const val PREF_PREFERRED_GROUPS = "inkstory_preferred_groups"
-        private const val PREF_BLOCKED_GROUPS = "inkstory_blocked_groups"
+        private const val PREF_LEGACY_DEDUPE = "inkstory_one_per_chapter"
+        private const val PREF_LEGACY_PREFERRED_GROUPS = "inkstory_preferred_groups"
+        private const val PREF_LEGACY_BLOCKED_GROUPS = "inkstory_blocked_groups"
         private const val PREF_DELAY = "delay_chapters"
         private const val PREF_TITLE_LANGUAGE = "inkstory_title_language"
         private const val PREF_LEGACY_BRANCH_MODE = "inkstory_chapter_branch_mode"

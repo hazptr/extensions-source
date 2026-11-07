@@ -1,7 +1,5 @@
 package eu.kanade.tachiyomi.extension.all.swarm
 
-import androidx.preference.EditTextPreference
-import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -16,6 +14,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
+import keiyoushi.source.ChapterUploadPreferences
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.aesCbc
 import keiyoushi.utils.aesEncrypt
@@ -41,6 +40,8 @@ abstract class Swarm :
     ConfigurableSource {
 
     private val preferences by getPreferencesLazy()
+
+    private val chapterUploads by lazy { ChapterUploadPreferences(preferences, chapterUploadStrings, onePerGroup = true, defaultPreferredGroups = listOf("Official")) }
 
     private val showAdult get() = preferences.getBoolean(PREF_ADULT, false)
 
@@ -123,29 +124,14 @@ abstract class Swarm :
     // The comic page carries the site's chapter list: the newest 10000 uploads across all languages
     private fun chapterList(all: List<ChapterDto>): List<ChapterDto> {
         val langs = siteLangs
-        val blocked = commaList(PREF_BLOCKED_GROUPS, "")
-        val uploads = all
-            .filter { it.lang in langs }
-            .filterNot { upload -> blocked.any { it.equals(upload.group, true) || it.equals(upload.uploader, true) } }
-            .sortedByDescending { it.number.toFloatOrNull() }
+        val uploads = all.filter { it.lang in langs }.sortedByDescending { it.number.toFloatOrNull() }
         // The site's pick among a number's uploads is the lowest rank letter
-        val sitePick = compareBy<ChapterDto>({ it.rank ?: "~" }, { it.copyIndex })
-        return when (preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP)) {
-            ALL_UPLOADS -> uploads
-            ONE_PER_CHAPTER -> {
-                val preferred = commaList(PREF_PREFERRED_GROUPS, DEFAULT_PREFERRED_GROUPS)
-                val preferredRank = { upload: ChapterDto ->
-                    preferred.indexOfFirst { it.equals(upload.group, true) || it.equals(upload.uploader, true) }
-                        .takeIf { it >= 0 } ?: preferred.size
-                }
-                uploads.groupBy { it.number }.values.map { same -> same.minWith(compareBy(preferredRank).then(sitePick)) }
-            }
-            else -> {
-                val picks = uploads.groupBy { it.number to it.group }.values
-                    .mapTo(HashSet()) { same -> same.minWith(sitePick).id }
-                uploads.filter { it.id in picks }
-            }
-        }
+        return chapterUploads.select(
+            uploads,
+            chapter = { it.number },
+            groups = { listOf(it.group, it.uploader) },
+            rank = compareBy({ it.rank ?: "~" }, { it.copyIndex }),
+        )
     }
 
     override fun getChapterUrl(chapter: SChapter): String {
@@ -212,41 +198,8 @@ abstract class Swarm :
             setDefaultValue(false)
         }.let(screen::addPreference)
 
-        val preferredGroups = EditTextPreference(screen.context).apply {
-            key = PREF_PREFERRED_GROUPS
-            title = "Preferred uploaders"
-            summary = "Uploader names, comma-separated. One per chapter shows the first listed one that has the chapter. " +
-                "Default: $DEFAULT_PREFERRED_GROUPS, the site's official releases"
-            dialogTitle = "Preferred uploaders"
-            setDefaultValue(DEFAULT_PREFERRED_GROUPS)
-            setEnabled(preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP) == ONE_PER_CHAPTER)
-        }
-
-        ListPreference(screen.context).apply {
-            key = PREF_CHAPTER_LIST
-            title = "Chapter list"
-            entries = arrayOf("All uploads, like the site's list", "One per uploader", "One per chapter")
-            entryValues = arrayOf(ALL_UPLOADS, ONE_PER_GROUP, ONE_PER_CHAPTER)
-            summary = "%s"
-            setDefaultValue(ONE_PER_GROUP)
-            setOnPreferenceChangeListener { _, newValue ->
-                preferredGroups.setEnabled(newValue == ONE_PER_CHAPTER)
-                true
-            }
-        }.let(screen::addPreference)
-
-        screen.addPreference(preferredGroups)
-
-        EditTextPreference(screen.context).apply {
-            key = PREF_BLOCKED_GROUPS
-            title = "Blocked uploaders"
-            summary = "Uploader names, comma-separated. Their uploads are left out of the chapter list"
-            dialogTitle = "Blocked uploaders"
-            setDefaultValue("")
-        }.let(screen::addPreference)
+        chapterUploads.setupPreferenceScreen(screen)
     }
-
-    private fun commaList(key: String, default: String) = preferences.getString(key, default).orEmpty().split(',').map(String::trim).filter(String::isNotEmpty)
 
     companion object {
         private const val POPULAR_LIMIT = 100
@@ -254,12 +207,5 @@ abstract class Swarm :
         private const val BROWSE_LIMIT = 50
         private const val PAYLOAD_SECRET = "e3bca6f9a7e64e369ddc450bb7ff295b3d78e7d4fcb148c10d10ae9385476a5f"
         private const val PREF_ADULT = "pref_show_adult"
-        private const val PREF_CHAPTER_LIST = "pref_chapter_list"
-        private const val PREF_PREFERRED_GROUPS = "pref_preferred_groups"
-        private const val PREF_BLOCKED_GROUPS = "pref_blocked_groups"
-        private const val DEFAULT_PREFERRED_GROUPS = "official"
-        private const val ALL_UPLOADS = "all"
-        private const val ONE_PER_GROUP = "group"
-        private const val ONE_PER_CHAPTER = "chapter"
     }
 }

@@ -1,6 +1,5 @@
 package eu.kanade.tachiyomi.extension.en.atsumaru
 
-import androidx.preference.EditTextPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
@@ -16,6 +15,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
+import keiyoushi.source.ChapterUploadPreferences
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferencesLazy
@@ -42,7 +42,11 @@ abstract class Atsumaru :
         add("Content-Type", "application/json")
     }
 
-    private val prefs by getPreferencesLazy()
+    private val prefs by getPreferencesLazy {
+        ChapterUploadPreferences.migrate(this, dedupeSwitchKey = PREF_DEDUPLICATE_CHAPTERS, blockedGroupsKey = PREF_SCANLATOR_BLACKLIST)
+    }
+
+    private val chapterUploads by lazy { ChapterUploadPreferences(prefs, chapterUploadStrings) }
 
     // ============================== Popular ===============================
 
@@ -299,26 +303,18 @@ abstract class Atsumaru :
 
         val updatedChapters = if (fetchChapters && chaptersDto != null) {
             val scanlatorMap = details?.scanlators?.associate { it.id to it.name }.orEmpty()
-            val blacklist = scanlatorBlacklist
-            val filteredChapters = if (blacklist.isEmpty()) {
-                chaptersDto.chapters
-            } else {
-                chaptersDto.chapters.filter { chapter ->
-                    val name = chapter.scanlationMangaId?.let(scanlatorMap::get)
-                    name == null || name.trim().lowercase() !in blacklist
-                }
-            }
-            val chapterDtos = if (deduplicateChapters) {
-                val scores = details?.scanlators?.associate { it.id to it.score }.orEmpty()
-                filteredChapters.groupBy { it.number }.map { (_, uploads) ->
-                    uploads.maxWith(
-                        compareBy<ChapterDto> { scores[it.scanlationMangaId] ?: Int.MIN_VALUE }
-                            .thenBy { it.dateUploadMillis() },
-                    )
-                }
-            } else {
-                filteredChapters
-            }
+            val scores = details?.scanlators?.associate { it.id to it.score }.orEmpty()
+            val chapterDtos = chapterUploads.select(
+                chaptersDto.chapters,
+                chapter = { it.number },
+                groups = { upload ->
+                    // The site joins a release's groups with " · "
+                    val name = upload.scanlationMangaId?.let(scanlatorMap::get)
+                    listOf(name) + name?.split(" · ").orEmpty()
+                },
+                rank = compareByDescending<ChapterDto> { scores[it.scanlationMangaId] ?: Int.MIN_VALUE }
+                    .thenByDescending { it.dateUploadMillis() },
+            )
             chapterDtos.map {
                 it.toSChapter(manga.url, it.scanlationMangaId?.let { id -> scanlatorMap[id] })
             }.sortedWith(
@@ -377,16 +373,6 @@ abstract class Atsumaru :
         return "&excludedTags=${ids.joinToString(",")}"
     }
 
-    private val deduplicateChapters: Boolean
-        get() = prefs.getBoolean(PREF_DEDUPLICATE_CHAPTERS, false)
-
-    private val scanlatorBlacklist: Set<String>
-        get() = prefs.getString(PREF_SCANLATOR_BLACKLIST, "").orEmpty()
-            .split(",")
-            .map { it.trim().lowercase() }
-            .filter { it.isNotEmpty() }
-            .toSet()
-
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         SwitchPreferenceCompat(screen.context).apply {
             key = PREF_SHOW_18
@@ -430,20 +416,7 @@ abstract class Atsumaru :
             }
         }.let(screen::addPreference)
 
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_DEDUPLICATE_CHAPTERS
-            title = "Deduplicate chapters"
-            summary = "Show one upload per chapter, from the highest rated group that has it"
-            setDefaultValue(false)
-        }.let(screen::addPreference)
-
-        EditTextPreference(screen.context).apply {
-            key = PREF_SCANLATOR_BLACKLIST
-            title = "Excluded scanlators"
-            summary = "Comma-separated group names to exclude from the chapter list"
-            dialogTitle = "Excluded scanlators"
-            setDefaultValue("")
-        }.let(screen::addPreference)
+        chapterUploads.setupPreferenceScreen(screen)
     }
 
     companion object {

@@ -45,6 +45,7 @@ or fix them directly by submitting a Pull Request.
         - [WebView execution - `runWebView` / `getLocalStorage`](#webview-execution---runwebview--getlocalstorage)
         - [Filter helpers - `firstInstance` / `firstInstanceOrNull`](#filter-helpers---firstinstance--firstinstanceornull)
         - [SharedPreferences - `getPreferences` / `getPreferencesLazy`](#sharedpreferences---getpreferences--getpreferenceslazy)
+        - [Chapter list settings - `ChapterUploadPreferences`](#chapter-list-settings---chapteruploadpreferences)
         - [Next.js data extraction - `extractNextJs` / `extractNextJsRsc`](#nextjs-data-extraction---extractnextjs--extractnextjsrsc)
         - [Extracting URLs - `setUrlWithoutDomain` + `absUrl`](#extracting-urls---seturlwithoutdomain--absurl)
         - [GraphQL Requests - `graphQLBody` / `parseGraphQLAs`](#graphql-requests---graphqlbody--parsegraphqlas)
@@ -958,6 +959,38 @@ private val preferences by getPreferencesLazy {
 
 > [!NOTE]
 > `getPreferences()` and `getPreferencesLazy()` are extension functions on `HttpSource`. If you need to access preferences from a context without a source receiver (e.g. inside a helper class), use the top-level `getPreferences(sourceId)` function instead.
+
+##### Chapter list settings - `ChapterUploadPreferences`
+
+When a site lists several uploads of a chapter (other groups, official and scans, re-uploads), use `ChapterUploadPreferences` instead of your own dedupe or group settings. It adds the same three settings to every source: **Chapter list** (all uploads, one per group, one per chapter), **Preferred groups** (used by one per chapter) and **Blocked groups** (left out in every mode).
+
+```kotlin
+import keiyoushi.source.ChapterUploadPreferences
+
+private val preferences by getPreferencesLazy {
+    // Only when replacing the source's own earlier settings
+    ChapterUploadPreferences.migrate(this, dedupeSwitchKey = "pref_deduplicate_chapters", blockedGroupsKey = "pref_scanlator_blacklist")
+}
+
+private val chapterUploads by lazy { ChapterUploadPreferences(preferences, chapterUploadStrings, defaultPreferredGroups = listOf("Official")) }
+
+val chapters = chapterUploads.select(
+    uploads,
+    chapter = { it.number },
+    groups = { listOf(it.groupName) },
+    complete = { !it.partial },
+    rank = compareByDescending { it.votes },
+).map { it.toSChapter() }
+
+override fun setupPreferenceScreen(screen: PreferenceScreen) {
+    chapterUploads.setupPreferenceScreen(screen)
+}
+```
+
+- Set `onePerGroup = true` only when one group can have several uploads of a chapter; it then becomes the default. Otherwise the default lists every upload.
+- `defaultPreferredGroups`: the site's official groups as it names them. When the site marks official uploads instead, use `"Official"` and add `"Official"` to those uploads' `groups`.
+- `rank` is the site's own order for uploads of a chapter (votes, likes, score, the upload its reader opens). Ties keep the order of `uploads`.
+- The settings' text comes from `chapterUploadStrings`, generated in the source's language from `core/translations/strings.json`. Add a missing language there.
 
 ##### Next.js data extraction - `extractNextJs` / `extractNextJsRsc`
 

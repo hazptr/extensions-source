@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.extension.en.webnex
 
 import android.content.SharedPreferences
-import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
@@ -14,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
+import keiyoushi.source.ChapterUploadPreferences
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.MarkdownDescription
 import keiyoushi.utils.asJsoup
@@ -45,7 +45,12 @@ import kotlin.time.Instant
 abstract class Webnex :
     KeiSource(),
     ConfigurableSource {
-    private val preferences by getPreferencesLazy()
+    private val preferences by getPreferencesLazy {
+        ChapterUploadPreferences.migrate(this, blockedGroupsKey = PREF_HIDDEN_GROUPS)
+    }
+
+    // Groups the site marks as official translations
+    private val chapterUploads by lazy { ChapterUploadPreferences(preferences, chapterUploadStrings, defaultPreferredGroups = listOf("Webtoon", "Tapas", "Tappytoon")) }
 
     override fun OkHttpClient.Builder.configureClient() = addInterceptor(::seriesCookieInterceptor)
 
@@ -179,12 +184,9 @@ abstract class Webnex :
 
     // Each row is one chapter: the upload the site picked, plus the other groups' uploads in its dropdown.
     private fun parseChapters(document: Document, knownDates: Map<String, Long>): List<SChapter> {
-        val hiddenGroups = commaList(PREF_HIDDEN_GROUPS, "")
-        val preferredGroups = commaList(PREF_PREFERRED_GROUPS, DEFAULT_PREFERRED_GROUPS)
-        val onePerChapter = preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP) == ONE_PER_CHAPTER
-
         // Hidden rows are decoys the site's own page never shows
-        return document.select("li.ch-row:not([aria-hidden=true]):not([style*=display:none])").flatMap { element ->
+        val rows = document.select("li.ch-row:not([aria-hidden=true]):not([style*=display:none])")
+        val uploads = rows.flatMapIndexed { row, element ->
             val link = element.selectFirst("a.ch-link")!!
             val number = link.selectFirst(".ch-num")!!.ownText()
             val chapterName = link.selectFirst(".ch-title")?.let { "Chapter $number: ${it.text()}" } ?: "Chapter $number"
@@ -201,6 +203,7 @@ abstract class Webnex :
                 },
                 likes = element.selectFirst(".ch-likes")?.text()?.filter { it in '0'..'9' }?.toIntOrNull() ?: 0,
                 warning = false,
+                row = row,
             )
             val others = element.select(".ch-sources-menu a.ch-sources-item").map { item ->
                 Upload(
@@ -214,25 +217,23 @@ abstract class Webnex :
                     likes = item.selectFirst(".ch-sources-likes")?.text()?.toIntOrNull() ?: 0,
                     // The site's warning dot, drawn only on the dropdown's other uploads
                     warning = item.selectFirst(".dot-warn") != null,
+                    row = row,
                 )
             }
 
-            val uploads = (listOf(picked) + others).filterNot { it.isFromGroup(hiddenGroups) }
-            if (!onePerChapter) return@flatMap uploads.map { it.chapter }
-
-            // Ties keep the site's pick, listed first
-            listOfNotNull(
-                uploads.sortedWith(
-                    compareBy<Upload>({ it.warning }, { upload -> preferredGroups.rankOf { upload.isFromGroup(listOf(it)) } })
-                        .thenByDescending { it.likes },
-                ).firstOrNull()?.chapter,
-            )
+            listOf(picked) + others
         }
+        // Ties keep the site's pick, listed first
+        return chapterUploads.select(
+            uploads,
+            chapter = { it.row },
+            groups = { listOf(it.chapter.scanlator) },
+            complete = { !it.warning },
+            rank = compareByDescending { it.likes },
+        ).map { it.chapter }
     }
 
-    private class Upload(val chapter: SChapter, val likes: Int, val warning: Boolean) {
-        fun isFromGroup(groups: List<String>) = groups.any { it.equals(chapter.scanlator, ignoreCase = true) }
-    }
+    private class Upload(val chapter: SChapter, val likes: Int, val warning: Boolean, val row: Int)
 
     // Inverts the site's timeAgo(): "4w ago" means 4 weeks up to the 30 days where "1mo" takes over, so take the middle.
     private fun String?.parseTimeAgo(): Long {
@@ -289,43 +290,8 @@ abstract class Webnex :
             setDefaultValue("")
         }.let(screen::addPreference)
 
-        val preferredGroups = EditTextPreference(screen.context).apply {
-            key = PREF_PREFERRED_GROUPS
-            title = "Preferred groups"
-            summary = "Group names, comma-separated. One per chapter shows the first listed group that has an upload without the site's warning mark. " +
-                "Default: $DEFAULT_PREFERRED_GROUPS, the site's official translations"
-            dialogTitle = "Preferred groups"
-            setDefaultValue(DEFAULT_PREFERRED_GROUPS)
-            setEnabled(preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP) == ONE_PER_CHAPTER)
-        }
-
-        ListPreference(screen.context).apply {
-            key = PREF_CHAPTER_LIST
-            title = "Chapter list"
-            entries = arrayOf("One per group, like the site's list", "One per chapter")
-            entryValues = arrayOf(ONE_PER_GROUP, ONE_PER_CHAPTER)
-            summary = "%s"
-            setDefaultValue(ONE_PER_GROUP)
-            setOnPreferenceChangeListener { _, newValue ->
-                preferredGroups.setEnabled(newValue == ONE_PER_CHAPTER)
-                true
-            }
-        }.let(screen::addPreference)
-
-        screen.addPreference(preferredGroups)
-
-        EditTextPreference(screen.context).apply {
-            key = PREF_HIDDEN_GROUPS
-            title = "Hidden groups"
-            summary = "Group names, comma-separated. Their uploads are left out of the chapter list"
-            dialogTitle = "Hidden groups"
-            setDefaultValue("")
-        }.let(screen::addPreference)
+        chapterUploads.setupPreferenceScreen(screen)
     }
-
-    private fun commaList(key: String, default: String) = preferences.getString(key, default).orEmpty().split(',').map(String::trim).filter(String::isNotEmpty)
-
-    private fun List<String>.rankOf(matches: (String) -> Boolean) = indexOfFirst(matches).takeIf { it >= 0 } ?: size
 
     private val SharedPreferences.rating
         get() = getString(PREF_RATING, "")!!
@@ -342,15 +308,7 @@ abstract class Webnex :
 
     companion object {
         private const val PREF_RATING = "pref_rating"
-        private const val PREF_CHAPTER_LIST = "pref_chapter_list"
-        private const val PREF_PREFERRED_GROUPS = "pref_preferred_groups"
         private const val PREF_HIDDEN_GROUPS = "pref_hidden_groups"
-
-        private const val ONE_PER_GROUP = "group"
-        private const val ONE_PER_CHAPTER = "chapter"
-
-        // Groups the site marks as official translations
-        private const val DEFAULT_PREFERRED_GROUPS = "Webtoon, Tapas, Tappytoon"
 
         private val SERIES_COOKIE_REGEX = Regex("""<title>Opening series</title>.*?document\.cookie\s*=\s*"([^"]+)"""", RegexOption.DOT_MATCHES_ALL)
 

@@ -251,7 +251,8 @@ class ChapterDto(
 
     fun isFromSource(key: String) = key.equals(src, ignoreCase = true)
 
-    fun isFromGroup(name: String) = name.equals(group?.name, ignoreCase = true) || name.equals(group?.slug, ignoreCase = true)
+    // Group names also match the source code
+    val groupNames get() = listOf(group?.name, group?.slug, src)
 
     fun toSChapter(mangaUrl: String, withSourceCode: Boolean, nameFormat: String) = SChapter.create().apply {
         url = "$mangaUrl/$id"

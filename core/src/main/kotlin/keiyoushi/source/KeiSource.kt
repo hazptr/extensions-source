@@ -282,6 +282,22 @@ abstract class KeiSource : HttpSource() {
     protected open val filterFetchHint: String get() = "Tap 'Reset' to load filters"
 
     /**
+     * Text of the [ChapterUploadPreferences] settings in the source's language
+     * Do not override by hand
+     */
+    protected open val chapterUploadStrings: ChapterUploadPreferences.Strings get() = ChapterUploadPreferences.Strings(
+        chapterList = "Chapter list",
+        chapterListAllUploads = "All uploads",
+        chapterListOnePerGroup = "One per group",
+        chapterListOnePerChapter = "One per chapter",
+        preferredGroups = "Preferred groups",
+        preferredGroupsSummary = "Group names, comma-separated, in order. One per chapter shows the first of them that has the chapter.",
+        blockedGroups = "Blocked groups",
+        blockedGroupsSummary = "Group names, comma-separated. Their uploads are left out of the chapter list.",
+        defaultValue = "Default: %s",
+    )
+
+    /**
      * Fetches filter data from the network.
      *
      * Only called when [supportsFilterFetching] is true, on a background coroutine.

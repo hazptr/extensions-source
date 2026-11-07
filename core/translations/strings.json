@@ -3,7 +3,16 @@
     "mirrorTitle": "Preferred Mirror",
     "customUrlTitle": "Custom Base URL",
     "customUrlDialogMessage": "Leave blank to use the default URL.",
-    "filterFetchHint": "Tap 'Reset' to load filters"
+    "filterFetchHint": "Tap 'Reset' to load filters",
+    "chapterUploadsList": "Chapter list",
+    "chapterUploadsAllUploads": "All uploads",
+    "chapterUploadsOnePerGroup": "One per group",
+    "chapterUploadsOnePerChapter": "One per chapter",
+    "chapterUploadsPreferredGroups": "Preferred groups",
+    "chapterUploadsPreferredGroupsSummary": "Group names, comma-separated, in order. One per chapter shows the first of them that has the chapter.",
+    "chapterUploadsBlockedGroups": "Blocked groups",
+    "chapterUploadsBlockedGroupsSummary": "Group names, comma-separated. Their uploads are left out of the chapter list.",
+    "chapterUploadsDefault": "Default: %s"
   },
   "ar": {
     "mirrorTitle": "الخادم البديل المفضل",
@@ -33,7 +42,16 @@
     "mirrorTitle": "Домен",
     "customUrlTitle": "Домен",
     "customUrlDialogMessage": "Оставьте пустым, чтобы использовать домен по умолчанию",
-    "filterFetchHint": "Нажмите «Сбросить», чтобы загрузить фильтры"
+    "filterFetchHint": "Нажмите «Сбросить», чтобы загрузить фильтры",
+    "chapterUploadsList": "Список глав",
+    "chapterUploadsAllUploads": "Все загрузки",
+    "chapterUploadsOnePerGroup": "Одна на команду",
+    "chapterUploadsOnePerChapter": "Одна на главу",
+    "chapterUploadsPreferredGroups": "Предпочитаемые команды",
+    "chapterUploadsPreferredGroupsSummary": "Через запятую, по порядку. В режиме «Одна на главу» остаётся первая из них, у которой есть глава.",
+    "chapterUploadsBlockedGroups": "Скрытые команды",
+    "chapterUploadsBlockedGroupsSummary": "Через запятую. Главы этих команд не показываются.",
+    "chapterUploadsDefault": "По умолчанию: %s"
   },
   "uk": {
     "filterFetchHint": "Натисніть «Скинути», щоб завантажити фільтри"

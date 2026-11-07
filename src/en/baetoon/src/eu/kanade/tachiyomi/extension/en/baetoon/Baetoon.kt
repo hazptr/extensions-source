@@ -1,8 +1,5 @@
 package eu.kanade.tachiyomi.extension.en.baetoon
 
-import android.content.SharedPreferences
-import androidx.preference.EditTextPreference
-import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -14,6 +11,7 @@ import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
+import keiyoushi.source.ChapterUploadPreferences
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.extractNextJs
 import keiyoushi.utils.firstInstanceOrNull
@@ -30,6 +28,8 @@ abstract class Baetoon :
     ConfigurableSource {
 
     private val preferences by getPreferencesLazy()
+
+    private val chapterUploads by lazy { ChapterUploadPreferences(preferences, chapterUploadStrings, onePerGroup = true) }
 
     private val rscHeaders get() = headersBuilder().set("rsc", "1").build()
 
@@ -81,10 +81,7 @@ abstract class Baetoon :
         fetchChapters: Boolean,
     ): SMangaUpdate {
         val detail = fetchDetail(getMangaUrl(manga))
-        val mode = preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP)
-        val preferred = preferences.groups(PREF_PREFERRED_GROUPS)
-        val blocked = preferences.groups(PREF_BLOCKED_GROUPS)
-        return SMangaUpdate(detail.toSManga(), detail.chapters.flatMap { it.toSChapters(mode, preferred, blocked) })
+        return SMangaUpdate(detail.toSManga(), chapterList(detail.chapters))
     }
 
     override suspend fun fetchRelatedMangaList(manga: SManga) = fetchDetail(getMangaUrl(manga)).recommendations.map { it.toSManga() }
@@ -92,20 +89,17 @@ abstract class Baetoon :
     private suspend fun fetchDetail(url: String): DetailDto = fetchRsc<DetailDto>(url)
         ?: throw Exception("Title not found")
 
-    private fun ChapterDto.toSChapters(mode: String?, preferred: List<String>, blocked: List<String>): List<SChapter> {
-        val uploads = sources.filterNot { it.sourceName.lowercase() in blocked }
-        return when (mode) {
-            // The site lists a source's repeat uploads of a chapter under the same name
-            ALL_UPLOADS -> uploads.mapIndexed { index, upload ->
-                val copy = uploads.take(index + 1).count { it.sourceName == upload.sourceName }
-                upload.toSChapter(this, if (copy > 1) "${upload.sourceName} ($copy)" else upload.sourceName)
-            }
-            ONE_PER_CHAPTER -> {
-                val upload = preferred.firstNotNullOfOrNull { group -> uploads.firstOrNull { it.sourceName.lowercase() == group } }
-                    ?: uploads.firstOrNull()
-                listOfNotNull(upload?.toSChapter(this))
-            }
-            else -> uploads.distinctBy { it.sourceName }.map { it.toSChapter(this) }
+    private fun chapterList(chapters: List<ChapterDto>): List<SChapter> {
+        val uploads = chapterUploads.select(
+            chapters.flatMap { chapter -> chapter.sources.map { chapter to it } },
+            chapter = { it.first },
+            groups = { listOf(it.second.sourceName) },
+        )
+        // The site lists a source's repeat uploads of a chapter under the same name
+        val copies = HashMap<Pair<ChapterDto, String>, Int>()
+        return uploads.map { (chapter, upload) ->
+            val copy = copies.merge(chapter to upload.sourceName, 1, Int::plus)!!
+            upload.toSChapter(chapter, if (copy > 1) "${upload.sourceName} ($copy)" else upload.sourceName)
         }
     }
 
@@ -130,38 +124,7 @@ abstract class Baetoon :
     )
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        val preferredGroups = EditTextPreference(screen.context).apply {
-            key = PREF_PREFERRED_GROUPS
-            title = "Preferred sources"
-            summary = "Source names, comma-separated, as shown on each chapter. " +
-                "One per chapter shows the first listed source that has the chapter, otherwise the one the site opens. Default: none"
-            dialogTitle = "Preferred sources"
-            setDefaultValue("")
-            setEnabled(preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP) == ONE_PER_CHAPTER)
-        }
-
-        ListPreference(screen.context).apply {
-            key = PREF_CHAPTER_LIST
-            title = "Chapter list"
-            entries = arrayOf("One per source", "All uploads, like the site's list", "One per chapter")
-            entryValues = arrayOf(ONE_PER_GROUP, ALL_UPLOADS, ONE_PER_CHAPTER)
-            summary = "%s"
-            setDefaultValue(ONE_PER_GROUP)
-            setOnPreferenceChangeListener { _, newValue ->
-                preferredGroups.setEnabled(newValue == ONE_PER_CHAPTER)
-                true
-            }
-        }.let(screen::addPreference)
-
-        screen.addPreference(preferredGroups)
-
-        EditTextPreference(screen.context).apply {
-            key = PREF_BLOCKED_GROUPS
-            title = "Blocked sources"
-            summary = "Source names, comma-separated. Their uploads are left out of the chapter list"
-            dialogTitle = "Blocked sources"
-            setDefaultValue("")
-        }.let(screen::addPreference)
+        chapterUploads.setupPreferenceScreen(screen)
     }
 
     // Without the bare `_rsc` param the site answers an RSC fetch with a 307 to it
@@ -170,16 +133,4 @@ abstract class Baetoon :
         rscHeaders,
         Fetch.XHR,
     ).extractNextJs<T>()
-
-    private fun SharedPreferences.groups(key: String) = getString(key, "")!!
-        .split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
-
-    companion object {
-        private const val PREF_CHAPTER_LIST = "pref_chapter_list"
-        private const val PREF_PREFERRED_GROUPS = "pref_preferred_groups"
-        private const val PREF_BLOCKED_GROUPS = "pref_blocked_groups"
-        private const val ONE_PER_GROUP = "group"
-        private const val ALL_UPLOADS = "all"
-        private const val ONE_PER_CHAPTER = "chapter"
-    }
 }

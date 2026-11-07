@@ -18,6 +18,8 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
+import keiyoushi.source.ChapterUploadPreferences
+import keiyoushi.source.ChapterUploadPreferences.Mode
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.aesCtr
 import keiyoushi.utils.aesDecrypt
@@ -44,12 +46,10 @@ abstract class Toonkotsu :
     KeiSource(),
     ConfigurableSource {
     private val preferences by getPreferencesLazy {
-        if (contains(PREF_DEDUPLICATE_CHAPTERS)) {
-            val editor = edit().remove(PREF_DEDUPLICATE_CHAPTERS)
-            if (getBoolean(PREF_DEDUPLICATE_CHAPTERS, false)) editor.putString(PREF_CHAPTER_LIST, ONE_PER_CHAPTER)
-            editor.apply()
-        }
+        ChapterUploadPreferences.migrate(this, dedupeSwitchKey = PREF_DEDUPLICATE_CHAPTERS, blockedGroupsKey = PREF_HIDDEN_GROUPS)
     }
+
+    private val chapterUploads by lazy { ChapterUploadPreferences(preferences, chapterUploadStrings, onePerGroup = true, defaultPreferredGroups = listOf("Official")) }
 
     private val showAdult get() = preferences.getBoolean(PREF_ADULT, false)
 
@@ -178,7 +178,7 @@ abstract class Toonkotsu :
             details.thumbnail_url = covers?.await()?.earliestEnglishUrl(baseUrl) ?: details.thumbnail_url.takeIf { fetchDetails }
         }
         // One per chapter ranks by likes, a request of its own
-        val needsLikes = preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP) == ONE_PER_CHAPTER
+        val needsLikes = chapterUploads.mode == Mode.ONE_PER_CHAPTER
         SMangaUpdate(details, if (fetchChapters || !needsLikes) chapterList(data, manga.url) else chapters)
     }
 
@@ -194,34 +194,31 @@ abstract class Toonkotsu :
         val byVolume = allUploads.filter { it.n != null && it.numericVolume != null }
             .groupBy({ it.n }, { it.numericVolume })
             .count { (_, volumes) -> volumes.distinct().size > 1 } >= 3
-        val hiddenGroups = commaList(PREF_HIDDEN_GROUPS, "")
-        val uploads = allUploads.filterNot { upload -> hiddenGroups.any { upload.isFromSource(it) || upload.isFromGroup(it) } }
+        val uploads = allUploads.filterNot { chapterUploads.isBlocked(it.groupNames) }
         val preferredSources = commaList(PREF_PREFERRED_SOURCES, "")
         val sourceRank = { upload: ChapterDto -> preferredSources.rankOf(upload::isFromSource) }
         // One upload per row, in the site's order; preferred sources sit where the site's own preferred source does
         val picks = uploads.sortedWith(compareBy({ it.partial }, sourceRank, { it.parentId != null }))
             .distinctBy { it.row(byVolume) }
             .toSet()
-        val chapterList = when (preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP)) {
-            ONE_PER_GROUP -> {
+        val chapterList = when (chapterUploads.mode) {
+            Mode.ONE_PER_GROUP -> {
                 val complete = picks.filterNot { it.partial }.mapTo(HashSet()) { it.row(byVolume, byGroup = false) }
                 // The site hides a partial-only row when another group has the full chapter
                 uploads.filter { it in picks && (!it.partial || it.row(byVolume, byGroup = false) !in complete) }
             }
-            ONE_PER_CHAPTER -> {
-                val preferredGroups = commaList(PREF_PREFERRED_GROUPS, DEFAULT_PREFERRED_GROUPS)
+            Mode.ONE_PER_CHAPTER -> {
                 // The site's per-chapter likes, its only user rank for uploads
                 val likes = fetchLikes(data.series.id)
-                uploads.filter { it in picks }
-                    .groupBy { it.row(byVolume, byGroup = false) }
-                    .map { (_, same) ->
-                        same.sortedWith(
-                            compareBy<ChapterDto>({ it.partial }, { preferredGroups.rankOf(it::isFromGroup) })
-                                .thenByDescending { likes[it.id.toString()] ?: 0 },
-                        ).first()
-                    }
+                chapterUploads.select(
+                    uploads.filter { it in picks },
+                    chapter = { it.row(byVolume, byGroup = false) },
+                    groups = { it.groupNames },
+                    complete = { !it.partial },
+                    rank = compareByDescending { likes[it.id.toString()] ?: 0 },
+                )
             }
-            else -> {
+            Mode.ALL_UPLOADS -> {
                 val rows = uploads.groupBy { it.row(byVolume, byGroup = false) }.values
                 val copies = rows.flatMapTo(HashSet()) { row ->
                     val kept = mutableListOf<ChapterDto>()
@@ -355,38 +352,7 @@ abstract class Toonkotsu :
             setDefaultValue("")
         }.let(screen::addPreference)
 
-        val preferredGroups = EditTextPreference(screen.context).apply {
-            key = PREF_PREFERRED_GROUPS
-            title = "Preferred groups"
-            summary = "Group names, comma-separated. One per chapter shows the first listed group that has a complete upload. " +
-                "Default: $DEFAULT_PREFERRED_GROUPS, the site's official releases"
-            dialogTitle = "Preferred groups"
-            setDefaultValue(DEFAULT_PREFERRED_GROUPS)
-            setEnabled(preferences.getString(PREF_CHAPTER_LIST, ONE_PER_GROUP) == ONE_PER_CHAPTER)
-        }
-
-        ListPreference(screen.context).apply {
-            key = PREF_CHAPTER_LIST
-            title = "Chapter list"
-            entries = arrayOf("All versions, like the site's version picker", "One per group, like the site's list", "One per chapter")
-            entryValues = arrayOf(ALL_UPLOADS, ONE_PER_GROUP, ONE_PER_CHAPTER)
-            summary = "%s"
-            setDefaultValue(ONE_PER_GROUP)
-            setOnPreferenceChangeListener { _, newValue ->
-                preferredGroups.setEnabled(newValue == ONE_PER_CHAPTER)
-                true
-            }
-        }.let(screen::addPreference)
-
-        screen.addPreference(preferredGroups)
-
-        EditTextPreference(screen.context).apply {
-            key = PREF_HIDDEN_GROUPS
-            title = "Hidden groups and sources"
-            summary = "Group names or source codes, comma-separated. Their uploads are left out of the chapter list"
-            dialogTitle = "Hidden groups and sources"
-            setDefaultValue("")
-        }.let(screen::addPreference)
+        chapterUploads.setupPreferenceScreen(screen)
 
         EditTextPreference(screen.context).apply {
             key = PREF_PREFERRED_SOURCES
@@ -431,15 +397,9 @@ abstract class Toonkotsu :
         private const val PREF_CHAPTER_NAMES = "pref_chapter_names"
         private const val PREF_LANGUAGES = "pref_original_languages"
         private const val PREF_EXCLUDED_TAGS = "pref_excluded_tags"
-        private const val PREF_CHAPTER_LIST = "pref_chapter_list"
         private const val PREF_PREFERRED_SOURCES = "pref_preferred_sources"
-        private const val PREF_PREFERRED_GROUPS = "pref_preferred_groups"
         private const val PREF_HIDDEN_GROUPS = "pref_hidden_groups"
         private const val PREF_ENGLISH_COVERS = "pref_english_covers"
-        private const val DEFAULT_PREFERRED_GROUPS = "Official"
-        private const val ALL_UPLOADS = "all"
-        private const val ONE_PER_GROUP = "group"
-        private const val ONE_PER_CHAPTER = "chapter"
         private const val TURNSTILE_SITE_KEY = "0x4AAAAAAFQpQeG5qpmLQtf9"
         private val HID_REGEX = Regex("""^[a-z][0-9a-z]{4}(?=-|$)""")
     }

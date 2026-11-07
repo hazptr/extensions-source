@@ -34,6 +34,15 @@ data class PartialLocaleStrings(
     val customUrlTitle: String? = null,
     val customUrlDialogMessage: String? = null,
     val filterFetchHint: String? = null,
+    val chapterUploadsList: String? = null,
+    val chapterUploadsAllUploads: String? = null,
+    val chapterUploadsOnePerGroup: String? = null,
+    val chapterUploadsOnePerChapter: String? = null,
+    val chapterUploadsPreferredGroups: String? = null,
+    val chapterUploadsPreferredGroupsSummary: String? = null,
+    val chapterUploadsBlockedGroups: String? = null,
+    val chapterUploadsBlockedGroupsSummary: String? = null,
+    val chapterUploadsDefault: String? = null,
 )
 
 data class LocaleStrings(
@@ -41,6 +50,15 @@ data class LocaleStrings(
     val customUrlTitle: String,
     val customUrlDialogMessage: String,
     val filterFetchHint: String,
+    val chapterUploadsList: String,
+    val chapterUploadsAllUploads: String,
+    val chapterUploadsOnePerGroup: String,
+    val chapterUploadsOnePerChapter: String,
+    val chapterUploadsPreferredGroups: String,
+    val chapterUploadsPreferredGroupsSummary: String,
+    val chapterUploadsBlockedGroups: String,
+    val chapterUploadsBlockedGroupsSummary: String,
+    val chapterUploadsDefault: String,
 )
 
 @Serializable
@@ -80,6 +98,7 @@ private val preferenceScreen = ClassName("androidx.preference", "PreferenceScree
 private val mirrorPrefsClass = ClassName("keiyoushi.source", "MirrorPreferences")
 private val customUrlPrefsClass = ClassName("keiyoushi.source", "CustomUrlPreferences")
 private val fetchableBaseUrlClass = ClassName("keiyoushi.source", "FetchableBaseUrl")
+private val chapterUploadStringsClass = ClassName("keiyoushi.source", "ChapterUploadPreferences", "Strings")
 private val getPreferencesFn = MemberName("keiyoushi.utils", "getPreferences")
 
 class SourceProcessor(
@@ -106,6 +125,15 @@ class SourceProcessor(
             customUrlTitle = locale?.customUrlTitle ?: en.customUrlTitle!!,
             customUrlDialogMessage = locale?.customUrlDialogMessage ?: en.customUrlDialogMessage!!,
             filterFetchHint = locale?.filterFetchHint ?: en.filterFetchHint!!,
+            chapterUploadsList = locale?.chapterUploadsList ?: en.chapterUploadsList!!,
+            chapterUploadsAllUploads = locale?.chapterUploadsAllUploads ?: en.chapterUploadsAllUploads!!,
+            chapterUploadsOnePerGroup = locale?.chapterUploadsOnePerGroup ?: en.chapterUploadsOnePerGroup!!,
+            chapterUploadsOnePerChapter = locale?.chapterUploadsOnePerChapter ?: en.chapterUploadsOnePerChapter!!,
+            chapterUploadsPreferredGroups = locale?.chapterUploadsPreferredGroups ?: en.chapterUploadsPreferredGroups!!,
+            chapterUploadsPreferredGroupsSummary = locale?.chapterUploadsPreferredGroupsSummary ?: en.chapterUploadsPreferredGroupsSummary!!,
+            chapterUploadsBlockedGroups = locale?.chapterUploadsBlockedGroups ?: en.chapterUploadsBlockedGroups!!,
+            chapterUploadsBlockedGroupsSummary = locale?.chapterUploadsBlockedGroupsSummary ?: en.chapterUploadsBlockedGroupsSummary!!,
+            chapterUploadsDefault = locale?.chapterUploadsDefault ?: en.chapterUploadsDefault!!,
         )
     }
 
@@ -335,6 +363,35 @@ class SourceProcessor(
             addProperty(
                 PropertySpec.builder("filterFetchHint", String::class.asClassName(), KModifier.OVERRIDE, KModifier.PROTECTED)
                     .getter(FunSpec.getterBuilder().addStatement("return %S", stringsForLang(source.lang).filterFetchHint).build())
+                    .build(),
+            )
+        }
+
+        if ("chapterUploadStrings" in overridden) {
+            logger.error("chapterUploadStrings is owned by the DSL; remove 'override val chapterUploadStrings' from $className (it is generated per language from core/translations)", node)
+        } else {
+            val strings = stringsForLang(source.lang)
+            addProperty(
+                PropertySpec.builder("chapterUploadStrings", chapterUploadStringsClass, KModifier.OVERRIDE, KModifier.PROTECTED)
+                    .getter(
+                        FunSpec.getterBuilder().addCode(
+                            CodeBlock.builder()
+                                .add("return %T(\n", chapterUploadStringsClass)
+                                .indent()
+                                .add("chapterList = %S,\n", strings.chapterUploadsList)
+                                .add("chapterListAllUploads = %S,\n", strings.chapterUploadsAllUploads)
+                                .add("chapterListOnePerGroup = %S,\n", strings.chapterUploadsOnePerGroup)
+                                .add("chapterListOnePerChapter = %S,\n", strings.chapterUploadsOnePerChapter)
+                                .add("preferredGroups = %S,\n", strings.chapterUploadsPreferredGroups)
+                                .add("preferredGroupsSummary = %S,\n", strings.chapterUploadsPreferredGroupsSummary)
+                                .add("blockedGroups = %S,\n", strings.chapterUploadsBlockedGroups)
+                                .add("blockedGroupsSummary = %S,\n", strings.chapterUploadsBlockedGroupsSummary)
+                                .add("defaultValue = %S,\n", strings.chapterUploadsDefault)
+                                .unindent()
+                                .add(")\n")
+                                .build(),
+                        ).build(),
+                    )
                     .build(),
             )
         }
