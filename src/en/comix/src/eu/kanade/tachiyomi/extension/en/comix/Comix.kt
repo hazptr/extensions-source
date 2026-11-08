@@ -23,6 +23,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.rateLimit
+import keiyoushi.source.HiddenGenres
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.NativeWebViewApi
 import keiyoushi.utils.booleanOrNull
@@ -303,7 +304,7 @@ abstract class Comix :
         contentRating = preferences.contentRating(),
         selectedTypes = preferences.defaultTypes(),
         selectedDemographics = preferences.defaultDemographics(),
-        blockedGenres = preferences.blockedGenres(),
+        blockedGenres = preferences.blockedGenres() + HiddenGenres.select(Filters.getGenres().asList()) { it.first }.map { it.second },
     )
 
     private fun HttpUrl.Builder.applyPreferenceFilters() {
@@ -471,6 +472,8 @@ abstract class Comix :
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/title${manga.url}"
 
     override val supportsRelatedMangas = true
+
+    override val supportsHiddenGenres = true
 
     override suspend fun fetchRelatedMangaList(manga: SManga): List<SManga> {
         val url = getMangaUrl(manga)

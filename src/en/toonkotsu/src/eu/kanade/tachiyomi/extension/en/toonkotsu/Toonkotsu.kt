@@ -18,6 +18,7 @@ import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
+import keiyoushi.source.HiddenGenres
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.aesCtr
 import keiyoushi.utils.aesDecrypt
@@ -58,6 +59,8 @@ abstract class Toonkotsu :
     override val supportsFilterFetching = true
 
     override val supportsRelatedMangas = true
+
+    override val supportsHiddenGenres = true
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::decryptImage)
 
@@ -114,14 +117,16 @@ abstract class Toonkotsu :
         return MangasPage(data.items.map { it.toSManga(baseUrl, showSpoilerTags) }, data.hasNextPage)
     }
 
-    // Like the site's own language and tag settings: a search's own language wins, excluded tags add up and match any
+    // Like the site's own language and tag settings: a search's own language wins, excluded tags add up and match any.
+    // The app's hidden genres join them unless the search includes one.
     private fun HttpUrl.Builder.applyContentPreferences() {
         val current = build()
         val languages = preferences.getStringSet(PREF_LANGUAGES, emptySet())!!
         if (current.queryParameter("originalLanguage") == null && languages.isNotEmpty()) {
             addQueryParameter("originalLanguage", languages.sorted().joinToString(","))
         }
-        val excludedTags = commaList(PREF_EXCLUDED_TAGS, "")
+        val included = current.queryParameter("genres")?.split(',').orEmpty()
+        val excludedTags = commaList(PREF_EXCLUDED_TAGS, "") + HiddenGenres.spellings(included = included)
         if (excludedTags.isNotEmpty()) {
             val excluded = current.queryParameter("exclude")?.split(',').orEmpty() + excludedTags
             setQueryParameter("exclude", excluded.distinct().joinToString(","))
