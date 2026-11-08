@@ -1,5 +1,6 @@
 package eu.kanade.tachiyomi.extension.all.dlsite
 
+import eu.kanade.tachiyomi.network.HttpException
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -24,6 +25,7 @@ import keiyoushi.utils.string
 import keiyoushi.utils.stringOrNull
 import keiyoushi.utils.textOrNull
 import keiyoushi.utils.toJsonElement
+import keiyoushi.utils.toJsonRequestBody
 import keiyoushi.utils.toJsonString
 import keiyoushi.zip.Entry
 import keiyoushi.zip.zipDirectory
@@ -32,9 +34,12 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.CacheControl
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -46,6 +51,7 @@ import java.net.URLEncoder
 import java.nio.charset.Charset
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Instant
 
 @Source
 abstract class DLsite : KeiSource() {
@@ -53,12 +59,21 @@ abstract class DLsite : KeiSource() {
     private val language get() = LANGUAGES.getValue(lang)
 
     private val sessionMutex = Mutex()
-    private var bookSession: BookSampleSession? = null
+    private var viewerSession: ViewerSession? = null
+    private var playSession: PlaySession? = null
+
+    // The account's works, kept a few minutes so a library update doesn't ask once per work
+    private var owned: OwnedWorks? = null
 
     override fun OkHttpClient.Builder.configureClient() = rateLimit(2) { it.host == baseUrl.toHttpUrl().host || it.host == PLAY_HOST }
-        .addInterceptor(TrialInterceptor(TRIAL_HOST))
+        .addInterceptor(ArchiveInterceptor(setOf(TRIAL_HOST, DOWNLOAD_HOST)))
+        .addInterceptor(PlayInterceptor(PLAY_CDN_HOST))
         // Book sample pages: XOR with the work's key, carried in the fragment
-        .addInterceptor(XorInterceptor(SAMPLE_MEDIA_TYPE) { request -> request.url.fragment?.takeIf { request.url.host == SAMPLE_CDN_HOST }?.decodeHex() })
+        .addInterceptor(
+            XorInterceptor(SAMPLE_MEDIA_TYPE) { request ->
+                request.url.fragment?.takeIf { request.url.host == PLAY_CDN_HOST && "viewer" in request.url.pathSegments }?.decodeHex()
+            },
+        )
 
     override suspend fun getPopularManga(page: Int) = getSearchMangaList(page, "", FilterList())
 
@@ -66,6 +81,7 @@ abstract class DLsite : KeiSource() {
 
     override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val section = filters.firstInstanceOrNull<SectionFilter>()?.value ?: "maniax"
+        if (section == LIBRARY_SECTION) return library(query)
         val types = filters.firstInstanceOrNull<TypeFilter>()?.selected.orEmpty().ifEmpty { listOf("comic", "illust") }
         val genres = filters.firstInstanceOrNull<GenreFilter>()?.selected.orEmpty()
         val url = "$baseUrl/$section/fsr/ajax/=".toHttpUrl().newBuilder().apply {
@@ -100,6 +116,47 @@ abstract class DLsite : KeiSource() {
             }
         }
         return MangasPage(mangas, result.pageInfo.lastIndice < result.pageInfo.count)
+    }
+
+    // The works the user's DLsite account owns; DLsite Play lists them all at once
+    private suspend fun library(query: String): MangasPage {
+        val worknos = ownedWorknos()
+        val mangas = libraryWorks(worknos)
+            .filter { it.workType in READABLE_TYPES && it.title(language.locale).contains(query.trim(), ignoreCase = true) }
+            .map { it.toSManga(language.locale) }
+        return MangasPage(mangas, false)
+    }
+
+    private val isLoggedIn get() = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == LOGIN_COOKIE }
+
+    // The works the logged-in account owns
+    private suspend fun ownedWorknos(): List<String> {
+        if (!isLoggedIn) throw Exception(LOGIN_MESSAGE)
+        owned?.takeIf { Clock.System.now() - it.fetchedAt < OWNED_CACHE }?.let { return it.worknos }
+        val worknos = sales() ?: authorize().let { sales() } ?: throw Exception(LOGIN_MESSAGE)
+        owned = OwnedWorks(worknos, Clock.System.now())
+        return worknos
+    }
+
+    private class OwnedWorks(val worknos: List<String>, val fetchedAt: Instant)
+
+    // Null while DLsite Play has no session for the account
+    private suspend fun sales(): List<String>? = client.get("$PLAY_URL/api/v4/content/sales?last=0", Fetch.XHR.from(PLAY_URL), CacheControl.FORCE_NETWORK, ensureSuccess = false).use { response ->
+        when {
+            response.code == 401 -> null
+            !response.isSuccessful -> throw HttpException(response.code)
+            else -> response.parseAs<List<SaleDto>>().map { it.workno }
+        }
+    }
+
+    // DLsite Play's session, from the store login; an empty array means the store login wasn't accepted
+    private suspend fun authorize() {
+        val account = client.get("$PLAY_URL/api/authorize", Fetch.XHR.from(PLAY_URL), CacheControl.FORCE_NETWORK).parseAs<JsonElement>()
+        if (account is JsonArray) throw Exception(LOGIN_MESSAGE)
+    }
+
+    private suspend fun libraryWorks(worknos: List<String>): List<LibraryWorkDto> = worknos.chunked(LIBRARY_BATCH).flatMap { batch ->
+        client.post("$PLAY_URL/api/v4/content/works", Fetch.XHR.from(PLAY_URL), WorknosDto(batch).toJsonRequestBody()).parseAs<LibraryDto>().works
     }
 
     // A work in the site's lists, with its section in memo for the work page
@@ -142,11 +199,12 @@ abstract class DLsite : KeiSource() {
         val product = fetchProduct(manga.url) ?: throw Exception("This work isn't on sale anymore")
         val editionUrl = { workno: String -> workUrl(workno, product.siteId) }
         val updatedChapters = if (fetchChapters) {
+            val owned = async { ownedChapters(product) }
             val trialFiles = product.trialFiles
             val trials = trialFiles.mapIndexed { index, trial ->
                 async { trialChapters(product, trial, if (trialFiles.size > 1) "Trial ${index + 1}" else "Trial") }
             }
-            trials.awaitAll().flatten() + listOfNotNull(product.toSampleChapter(baseUrl))
+            owned.await() + listOfNotNull(product.toFreeChapter()) + trials.awaitAll().flatten() + listOfNotNull(product.toSampleChapter(baseUrl))
         } else {
             chapters
         }
@@ -166,84 +224,163 @@ abstract class DLsite : KeiSource() {
         return client.get(url, Fetch.XHR).parseAs<List<ProductDto>>().firstOrNull()
     }
 
-    // One chapter per folder of images: some trials hold the pages once per language
-    private suspend fun trialChapters(product: ProductDto, trial: TrialFileDto, label: String): List<SChapter> {
-        val folders = trialFolders(trial.zipUrl).keys
-        return folders.map { folder ->
-            SChapter.create().apply {
-                url = if (folders.size > 1) "/${trial.relativeUrl}/$folder" else "/${trial.relativeUrl}"
-                name = buildList {
-                    add(label)
-                    if (folders.size > 1) add(folder.substringAfterLast('/').ifEmpty { "/" })
-                }.joinToString(" - ")
-                date_upload = product.date
-                memo = buildJsonObject {
-                    put("zip", trial.zipUrl)
-                    put("folder", folder)
-                    put("workno", product.workno)
-                    put("site", product.siteId)
-                }
+    // The whole work, when the account owns it: the purchase archive's originals, or DLsite Play's pages for works it only
+    // serves there and downloads that aren't a single archive of images
+    private suspend fun ownedChapters(product: ProductDto): List<SChapter> {
+        if (!isLoggedIn || product.workno !in ownedWorknos()) return emptyList()
+        val work = libraryWorks(listOf(product.workno)).single()
+        // DLsite Play's DRM viewer, not readable here yet
+        if (work.playEncodeType?.startsWith("link_u") == true) return emptyList()
+        val archive = if (work.downloadable) downloadArchive(product.workno, product.siteId) else null
+        val archiveFolders = archive?.let { archiveFolders(it.url, it.referer).keys }.orEmpty()
+        val (type, folders) = if (archiveFolders.isNotEmpty()) ARCHIVE to archiveFolders else PLAY to playFolders(product.workno).keys
+        return folderChapters(folders, "/owned/${product.workno}", "Full", product) { put("type", type) }
+    }
+
+    private class DownloadArchive(val url: String, val referer: String)
+
+    // The archive the store's download button redirects to, which wants the download page as Referer; null when the page
+    // offers something else
+    private suspend fun downloadArchive(workno: String, site: String): DownloadArchive? {
+        val page = "$baseUrl/$site/download/=/product_id/$workno.html"
+        val response = client.newBuilder().followRedirects(false).build()
+            .get(page, Fetch.DOCUMENT.from(workUrl(workno, site)), CacheControl.FORCE_NETWORK, ensureSuccess = false)
+        response.close()
+        val archive = response.header("Location")?.takeIf { response.isRedirect } ?: return null
+        return DownloadArchive(archive, page)
+    }
+
+    private suspend fun playFolders(workno: String): Map<String, List<OptimizedDto>> = client.get("${playSession(workno).sign.url}ziptree.json", Fetch.XHR.from(PLAY_URL))
+        .parseAs<ZipTreeDto>()
+        .folders()
+
+    // Signed CDN cookies for one work's DLsite Play folder, set by the sign request itself
+    private suspend fun playSession(workno: String): PlaySession = sessionMutex.withLock {
+        val current = playSession
+        if (current != null && current.workno == workno && current.sign.expiresAt > Clock.System.now() + SESSION_MARGIN) {
+            return@withLock current
+        }
+        val url = "https://$PLAY_CDN_HOST/api/v3/download/sign/cookie".toHttpUrl().newBuilder().addQueryParameter("workno", workno).build()
+        val sign = client.get(url, Fetch.XHR.from("$PLAY_URL/work/$workno"), CacheControl.FORCE_NETWORK).parseAs<PlaySignDto>()
+        PlaySession(workno, sign).also { playSession = it }
+    }
+
+    private class PlaySession(val workno: String, val sign: PlaySignDto)
+
+    private suspend fun trialChapters(product: ProductDto, trial: TrialFileDto, label: String) = folderChapters(archiveFolders(trial.zipUrl).keys, "/${trial.relativeUrl}", label, product) {
+        put("type", TRIAL)
+        put("zip", trial.zipUrl)
+    }
+
+    // One chapter per folder of images: some archives hold the pages once per language
+    private fun folderChapters(folders: Set<String>, url: String, label: String, product: ProductDto, memo: JsonObjectBuilder.() -> Unit) = folders.map { folder ->
+        SChapter.create().apply {
+            this.url = if (folders.size > 1) "$url/$folder" else url
+            name = if (folders.size > 1) "$label - ${folder.substringAfterLast('/').ifEmpty { "/" }}" else label
+            date_upload = product.date
+            this.memo = buildJsonObject {
+                memo()
+                put("folder", folder)
+                put("workno", product.workno)
+                put("site", product.siteId)
             }
         }
     }
 
-    // The image folders in archive order, each in page order. Trials made by Japanese tools store names in Shift-JIS
-    private suspend fun trialFolders(zipUrl: String): Map<String, List<Entry>> = client.zipDirectory(zipUrl, charset = SHIFT_JIS).entries
+    // The image folders in archive order, each in page order. Archives made by Japanese tools store names in Shift-JIS
+    private suspend fun archiveFolders(zipUrl: String, referer: String? = null): Map<String, List<Entry>> = client.zipDirectory(
+        zipUrl,
+        if (referer == null) headers else headers.newBuilder().set("Referer", referer).build(),
+        charset = SHIFT_JIS,
+    ).entries
         .filter { IMAGE_REGEX.containsMatchIn(it.name) }
         .sortedBy { it.localHeaderOffset }
         .groupBy { it.name.substringBeforeLast('/', "") }
         .mapValues { (_, entries) -> entries.sortedBy { entry -> NUMBER_REGEX.replace(entry.name.lowercase()) { it.value.padStart(10, '0') } } }
 
-    override fun getChapterUrl(chapter: SChapter): String {
-        if (chapter.memo["zip"] == null) return "https://$PLAY_HOST${chapter.url}"
-        return workUrl(chapter.memo.getString("workno"), chapter.memo["site"]?.stringOrNull)
+    override fun getChapterUrl(chapter: SChapter): String = when (chapter.memo.getString("type")) {
+        ARCHIVE, PLAY -> "$PLAY_URL/work/${chapter.memo.getString("workno")}"
+        TRIAL -> workUrl(chapter.memo.getString("workno"), chapter.memo.getString("site"))
+        else -> "$PLAY_URL${chapter.url}"
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        chapter.memo["zip"]?.stringOrNull?.let { zipUrl ->
-            val folder = trialFolders(zipUrl)[chapter.memo.getString("folder")] ?: throw Exception("Refresh the chapter list")
-            return folder.mapIndexed { index, entry ->
-                val data = TrialEntry(entry.name, entry.localHeaderOffset, entry.compressedSize, entry.method, entry.localHeaderAllowance).toJsonString()
-                Page(index, imageUrl = "$zipUrl#$data")
+        val workno = chapter.memo["workno"]?.stringOrNull
+        val folder = chapter.memo["folder"]?.stringOrNull
+        return when (chapter.memo.getString("type")) {
+            ARCHIVE -> {
+                val archive = downloadArchive(workno!!, chapter.memo.getString("site")) ?: throw Exception(REFRESH_MESSAGE)
+                archivePages(archive.url, archiveFolders(archive.url, archive.referer)[folder] ?: throw Exception(REFRESH_MESSAGE), archive.referer)
             }
-        }
-        return if (chapter.memo.getString("sample") == "epub") {
-            bookSamplePages(chapter.memo.getString("workno"))
-        } else {
-            chapter.memo.getArray("images").mapIndexed { index, image -> Page(index, imageUrl = image.string) }
+            PLAY -> (playFolders(workno!!)[folder] ?: throw Exception(REFRESH_MESSAGE)).mapIndexed { index, page ->
+                // Pages the site marks as scrambled carry their size for the unscrambling
+                val size = if (page.crypt) ":${page.width}x${page.height}" else ""
+                Page(index, url = "$PLAY_URL/work/$workno#${page.name}$size")
+            }
+            TRIAL -> {
+                val zipUrl = chapter.memo.getString("zip")
+                archivePages(zipUrl, archiveFolders(zipUrl)[folder] ?: throw Exception(REFRESH_MESSAGE))
+            }
+            FREE, BOOK_SAMPLE -> viewerPages(chapter.memo.getString("type"), workno!!)
+            else -> chapter.memo.getArray("images").mapIndexed { index, image -> Page(index, imageUrl = image.string) }
         }
     }
 
-    private suspend fun bookSamplePages(workno: String): List<Page> {
-        val session = bookSampleSession(workno)
-        return client.get(session.token.url("viewer-meta.json"), Fetch.XHR.from(sampleViewerUrl(workno)))
+    private fun archivePages(zipUrl: String, entries: List<Entry>, referer: String? = null) = entries.mapIndexed { index, entry ->
+        val data = ArchiveEntry(entry.name, entry.localHeaderOffset, entry.compressedSize, entry.method, entry.localHeaderAllowance, referer).toJsonString()
+        Page(index, imageUrl = "$zipUrl#$data")
+    }
+
+    // A book sample or a free-to-read work, in DLsite Play's viewer: pages XORed with a key per session
+    private suspend fun viewerPages(kind: String, workno: String): List<Page> {
+        val session = viewerSession(kind, workno)
+        return client.get(session.url("viewer-meta.json"), Fetch.XHR.from(viewerPageUrl(kind, workno)))
             .parseAs<ViewerMetaDto>()
             .pages
             .filter { it.type == "image" }
-            .mapIndexed { index, page -> Page(index, url = "${sampleViewerUrl(workno)}#${page.src}") }
+            .mapIndexed { index, page -> Page(index, url = "${viewerPageUrl(kind, workno)}#${page.src}") }
     }
 
     // Signed again when the session the page list was made with has expired
     override suspend fun getImageUrl(page: Page): String {
         val url = page.url.toHttpUrl()
-        val session = bookSampleSession(url.pathSegments.last())
-        return session.token.url(url.fragment!!).newBuilder().fragment(session.key).build().toString()
+        val workno = url.pathSegments.last()
+        if (url.pathSegments.first() == "work") {
+            val name = url.fragment!!.substringBefore(':')
+            val size = url.fragment!!.substringAfter(':', "")
+            return "${playSession(workno).sign.url}optimized/$name" + if (size.isEmpty()) "" else "#$size"
+        }
+        val session = viewerSession(if (url.pathSegments.first() == FREE) FREE else BOOK_SAMPLE, workno)
+        return session.url(url.fragment!!).newBuilder().fragment(session.key).build().toString()
     }
 
-    private suspend fun bookSampleSession(workno: String): BookSampleSession = sessionMutex.withLock {
-        val current = bookSession
-        if (current != null && current.workno == workno && current.token.expiresAt > Clock.System.now() + SESSION_MARGIN) {
+    private suspend fun viewerSession(kind: String, workno: String): ViewerSession = sessionMutex.withLock {
+        val current = viewerSession
+        if (current != null && current.kind == kind && current.workno == workno && current.token.expiresAt > Clock.System.now() + SESSION_MARGIN) {
             return@withLock current
         }
-        val from = Fetch.XHR.from(sampleViewerUrl(workno))
-        val token = client.post("https://$PLAY_HOST/api/sample/viewer/token/$workno", from, RequestBody.EMPTY).parseAs<ViewerTokenDto>()
-        val key = client.get(token.url("decryption.key"), from).body.string().trim()
-        BookSampleSession(workno, token, key).also { bookSession = it }
+        val from = Fetch.XHR.from(viewerPageUrl(kind, workno))
+        val session = if (kind == BOOK_SAMPLE) {
+            val token = client.post("$PLAY_URL/api/sample/viewer/token/$workno", from, RequestBody.EMPTY).parseAs<ViewerTokenDto>()
+            ViewerSession(kind, workno, token, client.get(token.url("decryption.key"), from).body.string().trim(), "")
+        } else {
+            // The work's file tree gives the revision and the file to ask a key for, wrapped for a key pair of ours
+            val content = client.get("$PLAY_URL/api/free/token/$workno", from).parseAs<ViewerTokenDto>()
+            val tree = client.get(content.url("ziptree.json"), from).parseAs<FreeZipTreeDto>()
+            val (file, playFile) = tree.playfile.entries.single()
+            val keys = ViewerKeys()
+            val request = FreeViewerTokenRequest(playFile.type, tree.revision, keys.publicKey).toJsonRequestBody()
+            val token = client.post("$PLAY_URL/api/free/viewer/token/$workno", from, request).parseAs<ViewerTokenDto>()
+            ViewerSession(kind, workno, token, keys.unwrap(token.key!!), file)
+        }
+        session.also { viewerSession = it }
     }
 
-    private class BookSampleSession(val workno: String, val token: ViewerTokenDto, val key: String)
+    private class ViewerSession(val kind: String, val workno: String, val token: ViewerTokenDto, val key: String, private val folder: String) {
+        fun url(file: String) = token.url(if (folder.isEmpty()) file else "$folder/$file")
+    }
 
-    private fun sampleViewerUrl(workno: String) = "https://$PLAY_HOST/viewer/sample/$workno"
+    private fun viewerPageUrl(kind: String, workno: String) = if (kind == FREE) "$PLAY_URL/free/$workno" else "$PLAY_URL/viewer/sample/$workno"
 
     override val supportsRelatedMangas = true
 
@@ -296,7 +433,23 @@ abstract class DLsite : KeiSource() {
         private const val PAGE_SIZE = 30
         private const val PLAY_HOST = "play.dlsite.com"
         private const val TRIAL_HOST = "trial.dlsite.com"
-        private const val SAMPLE_CDN_HOST = "play.dl.dlsite.com"
+        private const val PLAY_URL = "https://$PLAY_HOST"
+        private const val PLAY_CDN_HOST = "play.dl.dlsite.com"
+        private const val DOWNLOAD_HOST = "download.dlsite.com"
+        const val LIBRARY_SECTION = "library"
+
+        // Chapter kinds, kept in their memo
+        const val TRIAL = "trial"
+        const val FREE = "free"
+        const val BOOK_SAMPLE = "book"
+        const val IMAGE_SAMPLE = "images"
+        private const val ARCHIVE = "archive"
+        private const val PLAY = "play"
+        private const val LIBRARY_BATCH = 1000
+        private const val LOGIN_COOKIE = "dlloginjp"
+        private const val LOGIN_MESSAGE = "Log in to DLsite in WebView to see your library"
+        private const val REFRESH_MESSAGE = "Refresh the chapter list"
+        private val OWNED_CACHE = 5.minutes
         private val SAMPLE_MEDIA_TYPE = "image/webp".toMediaType()
         private val SESSION_MARGIN = 10.minutes
 

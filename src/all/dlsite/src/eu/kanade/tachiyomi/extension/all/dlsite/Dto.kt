@@ -6,7 +6,6 @@ import eu.kanade.tachiyomi.source.model.UpdateStrategy
 import keiyoushi.utils.MarkdownDescription
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.tryParseDateTime
-import keiyoushi.zip.MAX_LOCAL_FILE_HEADER
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -22,6 +21,7 @@ import org.jsoup.nodes.Element
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.time.Clock
 import kotlin.time.Instant
 
 @Serializable
@@ -67,6 +67,8 @@ class ProductDto(
     @SerialName("image_samples") private val imageSamples: List<FileDto>? = null,
     @SerialName("sample_type") private val sampleType: String? = null,
     @SerialName("is_viewable_sample") private val isViewableSample: Boolean = false,
+    // The windows in which DLsite Play lets anyone read the work for free
+    @SerialName("limited_free_terms") private val freeTerms: List<FreeTermDto> = emptyList(),
 ) {
     val date get() = DATE_FORMAT.tryParseDateTime(registDate)
 
@@ -119,6 +121,20 @@ class ProductDto(
             .build()
     }
 
+    fun toFreeChapter(): SChapter? {
+        val now = Clock.System.now().toEpochMilliseconds()
+        val term = freeTerms.firstOrNull { now in DATE_FORMAT.tryParseDateTime(it.start)..DATE_FORMAT.tryParseDateTime(it.end) } ?: return null
+        return SChapter.create().apply {
+            url = "/free/$workno"
+            name = "Free"
+            date_upload = DATE_FORMAT.tryParseDateTime(term.start)
+            memo = buildJsonObject {
+                put("type", DLsite.FREE)
+                put("workno", workno)
+            }
+        }
+    }
+
     // Books show their sample in the site's book viewer, other works the sample images
     fun toSampleChapter(baseUrl: String): SChapter? {
         val readable = sampleType == "epub" || (sampleType == "images" && !imageSamples.isNullOrEmpty())
@@ -128,7 +144,7 @@ class ProductDto(
             name = "Sample"
             date_upload = date
             memo = buildJsonObject {
-                put("sample", sampleType)
+                put("type", if (sampleType == "epub") DLsite.BOOK_SAMPLE else DLsite.IMAGE_SAMPLE)
                 put("workno", workno)
                 if (sampleType == "images") putJsonArray("images") { imageSamples!!.forEach { add(baseUrl.toHttpUrl().resolve(it.url!!).toString()) } }
             }
@@ -178,11 +194,13 @@ class ViewerTokenDto(
     private val prefix: String,
     private val expireAt: String,
     private val parameters: Map<String, String>,
+    // The page key, wrapped with the public key sent for it
+    val key: String? = null,
 ) {
     val expiresAt get() = Instant.parse(expireAt)
 
-    fun url(file: String): HttpUrl = prefix.toHttpUrl().newBuilder()
-        .addPathSegment(file)
+    fun url(path: String): HttpUrl = prefix.toHttpUrl().newBuilder()
+        .addPathSegments(path)
         .apply { parameters.forEach { addEncodedQueryParameter(it.key, it.value) } }
         .build()
 }
@@ -194,6 +212,109 @@ class ViewerMetaDto(val pages: List<ViewerPageDto>)
 class ViewerPageDto(val type: String, val src: String)
 
 @Serializable
-class TrialEntry(val name: String, val offset: Long, val compressedSize: Long, val method: Int, val headerAllowance: Int = MAX_LOCAL_FILE_HEADER)
+class FreeTermDto(
+    @SerialName("start_date") val start: String,
+    @SerialName("end_date") val end: String,
+)
+
+@Serializable
+class FreeZipTreeDto(val revision: String, val playfile: Map<String, FreePlayFileDto>)
+
+@Serializable
+class FreePlayFileDto(val type: String)
+
+@Serializable
+class FreeViewerTokenRequest(
+    @SerialName("play_type") val playType: String,
+    val revision: String,
+    @SerialName("public_key") val publicKey: String,
+)
+
+@Serializable
+class SaleDto(val workno: String)
+
+@Serializable
+class WorknosDto(val worknos: List<String>)
+
+@Serializable
+class LibraryDto(val works: List<LibraryWorkDto>)
+
+@Serializable
+class LibraryWorkDto(
+    val workno: String,
+    private val name: Map<String, String>,
+    private val images: LibraryImagesDto? = null,
+    @SerialName("work_type") val workType: String,
+    val downloadable: Boolean = false,
+    @SerialName("play_encode_type") val playEncodeType: String? = null,
+) {
+    fun title(locale: String) = name[locale] ?: name["ja_JP"] ?: name.values.first()
+
+    fun toSManga(locale: String) = SManga.create().apply {
+        url = workno
+        title = this@LibraryWorkDto.title(locale)
+        thumbnail_url = images?.main
+    }
+}
+
+@Serializable
+class LibraryImagesDto(val main: String? = null)
+
+@Serializable
+class PlaySignDto(val url: String, private val expires: String) {
+    val expiresAt get() = Instant.parse(expires)
+}
+
+@Serializable
+class ZipTreeDto(private val tree: List<ZipTreeNodeDto>, private val playfile: Map<String, PlayFileDto>) {
+    // The image folders, in the work's file order; each PDF is a folder of its own pages
+    fun folders(): Map<String, List<OptimizedDto>> {
+        val folders = linkedMapOf<String, MutableList<OptimizedDto>>()
+        fun walk(nodes: List<ZipTreeNodeDto>, path: String) {
+            nodes.forEach { node ->
+                val nodePath = if (path.isEmpty()) node.name else "$path/${node.name}"
+                val file = node.hashname?.let { playfile[it] }
+                when {
+                    node.type == "folder" -> walk(node.children, nodePath)
+                    file?.image != null -> folders.getOrPut(path) { mutableListOf() } += file.image.optimized
+                    file?.pdf != null -> folders.getOrPut(nodePath) { mutableListOf() } += file.pdf.page.map { it.optimized }
+                }
+            }
+        }
+        walk(tree, "")
+        return folders
+    }
+}
+
+@Serializable
+class ZipTreeNodeDto(
+    val type: String,
+    val name: String,
+    val hashname: String? = null,
+    val children: List<ZipTreeNodeDto> = emptyList(),
+)
+
+@Serializable
+class PlayFileDto(val image: PlayImageDto? = null, val pdf: PlayPdfDto? = null)
+
+@Serializable
+class PlayImageDto(val optimized: OptimizedDto)
+
+@Serializable
+class PlayPdfDto(val page: List<PlayImageDto>)
+
+@Serializable
+class OptimizedDto(val name: String, val width: Int, val height: Int, val crypt: Boolean)
+
+@Serializable
+class ArchiveEntry(
+    val name: String,
+    val offset: Long,
+    val compressedSize: Long,
+    val method: Int,
+    val headerAllowance: Int,
+    // The download page, which purchase archives need as Referer
+    val referer: String? = null,
+)
 
 private val DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT).withZone(ZoneId.of("Asia/Tokyo"))

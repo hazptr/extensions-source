@@ -33,6 +33,7 @@ private val SECTIONS = listOf(
     "All Ages" to "home",
     "Otome (R18)" to "girls",
     "BL (R18)" to "bl",
+    "My library (log in via WebView)" to DLsite.LIBRARY_SECTION,
 )
 
 // None checked means both, like the lists
