@@ -8,36 +8,63 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import keiyoushi.annotation.Source
 import keiyoushi.network.Fetch
+import keiyoushi.network.XorInterceptor
 import keiyoushi.network.get
+import keiyoushi.network.post
 import keiyoushi.network.rateLimit
 import keiyoushi.source.KeiSource
 import keiyoushi.utils.asJsoup
+import keiyoushi.utils.attrOrNull
+import keiyoushi.utils.decodeHex
 import keiyoushi.utils.firstInstanceOrNull
+import keiyoushi.utils.getArray
+import keiyoushi.utils.getInt
+import keiyoushi.utils.getString
 import keiyoushi.utils.parseAs
+import keiyoushi.utils.string
+import keiyoushi.utils.stringOrNull
+import keiyoushi.utils.textOrNull
 import keiyoushi.utils.toJsonElement
+import keiyoushi.utils.toJsonString
+import keiyoushi.zip.Entry
+import keiyoushi.zip.zipDirectory
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Response
+import okhttp3.RequestBody
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.minutes
 
 @Source
 abstract class DLsite : KeiSource() {
 
     private val language get() = LANGUAGES.getValue(lang)
 
-    override fun OkHttpClient.Builder.configureClient() = rateLimit(2) { it.host == baseUrl.toHttpUrl().host }
+    private val sessionMutex = Mutex()
+    private var bookSession: BookSampleSession? = null
 
-    override suspend fun getPopularManga(page: Int) = search(page, "", FilterList())
+    override fun OkHttpClient.Builder.configureClient() = rateLimit(2) { it.host == baseUrl.toHttpUrl().host || it.host == PLAY_HOST }
+        .addInterceptor(TrialInterceptor(TRIAL_HOST))
+        // Book sample pages: XOR with the work's key, carried in the fragment
+        .addInterceptor(XorInterceptor(SAMPLE_MEDIA_TYPE) { request -> request.url.fragment?.takeIf { request.url.host == SAMPLE_CDN_HOST }?.decodeHex() })
 
-    override suspend fun getLatestUpdates(page: Int) = search(page, "", FilterList(SortFilter(SORTS.indexOfFirst { it.second == "release_d" })))
+    override suspend fun getPopularManga(page: Int) = getSearchMangaList(page, "", FilterList())
 
-    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList) = search(page, query, filters)
+    override suspend fun getLatestUpdates(page: Int) = getSearchMangaList(page, "", SortFilter.LATEST)
 
-    // The lists are the site's search, through the endpoint its pages load results from
-    private suspend fun search(page: Int, query: String, filters: FilterList): MangasPage {
+    override suspend fun getSearchMangaList(page: Int, query: String, filters: FilterList): MangasPage {
         val section = filters.firstInstanceOrNull<SectionFilter>()?.value ?: "maniax"
         val types = filters.firstInstanceOrNull<TypeFilter>()?.selected.orEmpty().ifEmpty { listOf("comic", "illust") }
         val genres = filters.firstInstanceOrNull<GenreFilter>()?.selected.orEmpty()
@@ -47,37 +74,40 @@ abstract class DLsite : KeiSource() {
             // Like the site, spaces are written "+" in the keyword: it answers "%20" with a 403
             if (query.isNotBlank()) addPathSegment("keyword").addEncodedPathSegment(URLEncoder.encode(query.trim(), "UTF-8"))
             types.forEachIndexed { index, type -> param("work_type_category[$index]", type) }
-            // The source's language: works available in it
             if (language.options.size > 1) param("options_and_or", "or")
             language.options.forEachIndexed { index, option -> param("options[$index]", option) }
+            if (filters.firstInstanceOrNull<NoAiFilter>()?.state == true) {
+                AI_OPTIONS.forEachIndexed { index, option -> param("options_not[$index]", option) }
+            }
             if (genres.isNotEmpty()) param("genre_and_or", "and")
             genres.forEachIndexed { index, genre -> param("genre[$index]", genre) }
-            if (filters.firstInstanceOrNull<FreeFilter>()?.state == true) param("is_free", "1")
             param("order[0]", filters.firstInstanceOrNull<SortFilter>()?.value ?: "trend")
             param("per_page", PAGE_SIZE.toString())
             param("page", page.toString())
             param("show_type", "1")
             addQueryParameter("locale", language.locale)
         }.build()
-        return searchMangaParse(client.get(url, Fetch.XHR))
-    }
 
-    // The results come as HTML, in a table for the Japanese locale and in a grid for the others
-    private fun searchMangaParse(response: Response): MangasPage {
-        val result = response.parseAs<SearchDto>()
-        val document = Jsoup.parseBodyFragment(result.searchResult, baseUrl)
-        val mangas = document.select("[data-list_item_product_id]").mapNotNull { item ->
-            val link = item.selectFirst(".work_name a[href]") ?: return@mapNotNull null
-            SManga.create().apply {
-                setUrlWithoutDomain(link.absUrl("href"))
-                title = link.attr("title").ifBlank { link.text() }
-                thumbnail_url = item.getElementsByTag("thumb-with-ng-filter-block").firstOrNull()
-                    ?.attr(":thumb-candidates")
-                    ?.let(::coverUrl)
-                author = item.select(".author a").joinToString { it.text() }.ifEmpty { item.selectFirst(".maker_name a")?.text() }
+        // The results come as HTML, in a table for the Japanese locale and in a grid for the others
+        val result = client.get(url, Fetch.XHR).parseAs<SearchDto>()
+        val mangas = Jsoup.parseBodyFragment(result.searchResult, baseUrl).select("[data-list_item_product_id]").map { item ->
+            toSManga(
+                item.attr("data-list_item_product_id"),
+                item.selectFirst(".work_name a[href]")!!,
+                item.selectFirst("thumb-with-ng-filter-block")?.attr(":thumb-candidates"),
+            ).apply {
+                author = item.select(".author a").joinToString { it.text() }.ifEmpty { item.selectFirst(".maker_name a")?.textOrNull() }
             }
         }
         return MangasPage(mangas, result.pageInfo.lastIndice < result.pageInfo.count)
+    }
+
+    // A work in the site's lists, with its section in memo for the work page
+    private fun toSManga(workno: String, link: Element, coverCandidates: String?) = SManga.create().apply {
+        url = workno
+        title = link.attrOrNull("title") ?: link.text()
+        thumbnail_url = coverCandidates?.let(::coverUrl)
+        memo = buildJsonObject { put("site", link.absUrl("href").toHttpUrl().pathSegments.first()) }
     }
 
     // The list's thumbnail candidates, a WebP and a JPEG, can be resized copies of the main image: it has the same path
@@ -85,46 +115,175 @@ abstract class DLsite : KeiSource() {
     private fun coverUrl(candidates: String): String? {
         val urls = CANDIDATE_REGEX.findAll(candidates).map { it.groupValues[1] }.toList()
         val url = urls.firstOrNull { it.endsWith(".jpg") } ?: urls.firstOrNull() ?: return null
-        val fullSize = url.replace("/resize/", "/modpub/").replace(SIZE_SUFFIX_REGEX, "")
-        return if (fullSize.startsWith("//")) "https:$fullSize" else fullSize
+        return baseUrl.toHttpUrl().resolve(url.replace("/resize/", "/modpub/").replace(SIZE_SUFFIX_REGEX, ""))?.toString()
     }
 
     override suspend fun getMangaByUrl(url: HttpUrl): SManga? {
-        if (url.host != baseUrl.toHttpUrl().host) return null
-        val match = PRODUCT_PATH_REGEX.find(url.encodedPath) ?: return null
-        val product = fetchProduct(match.groupValues[1], match.groupValues[2]) ?: return null
-        return product.toSManga().takeIf { product.workType in READABLE_TYPES }
+        if (url.host != baseUrl.toHttpUrl().host && url.host != PLAY_HOST) return null
+        val workno = PRODUCT_PATH_REGEX.matchEntire(url.encodedPath)?.groupValues?.get(1) ?: return null
+        val product = fetchProduct(workno)?.takeIf { it.workType in READABLE_TYPES } ?: return null
+        return product.toSManga(baseUrl) { workUrl(it, product.siteId) }
     }
+
+    override fun getMangaUrl(manga: SManga) = workUrl(manga.url, manga.memo["site"]?.stringOrNull)
+
+    private fun workUrl(workno: String, site: String?) = "$baseUrl/${site ?: "maniax"}/work/=/product_id/$workno.html".toHttpUrl().newBuilder()
+        .addQueryParameter("locale", language.locale)
+        .build()
+        .toString()
 
     override suspend fun fetchMangaUpdate(
         manga: SManga,
         chapters: List<SChapter>,
         fetchDetails: Boolean,
         fetchChapters: Boolean,
-    ): SMangaUpdate {
-        val match = PRODUCT_PATH_REGEX.find(manga.url)!!
-        val product = fetchProduct(match.groupValues[1], match.groupValues[2]) ?: throw Exception("This work isn't on sale anymore")
-        return SMangaUpdate(product.toSManga(), listOf(product.toSChapter()))
+    ): SMangaUpdate = coroutineScope {
+        val page = if (fetchDetails) async { client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup() } else null
+        val product = fetchProduct(manga.url) ?: throw Exception("This work isn't on sale anymore")
+        val editionUrl = { workno: String -> workUrl(workno, product.siteId) }
+        val updatedChapters = if (fetchChapters) {
+            val trialFiles = product.trialFiles
+            val trials = trialFiles.mapIndexed { index, trial ->
+                async { trialChapters(product, trial, if (trialFiles.size > 1) "Trial ${index + 1}" else "Trial") }
+            }
+            trials.awaitAll().flatten() + listOfNotNull(product.toSampleChapter(baseUrl))
+        } else {
+            chapters
+        }
+        val details = if (page != null) {
+            product.toSManga(baseUrl, editionUrl).apply { description = product.description(page.await().selectFirst("[itemprop=description]"), editionUrl) }
+        } else {
+            manga
+        }
+        SMangaUpdate(details, updatedChapters)
     }
 
-    // The work's data from the site's product API, in the source's language when the site has a translation
-    private suspend fun fetchProduct(section: String, workno: String): ProductDto? {
-        val url = "$baseUrl/$section/api/=/product.json".toHttpUrl().newBuilder()
+    private suspend fun fetchProduct(workno: String): ProductDto? {
+        val url = "$baseUrl/maniax/api/=/product.json".toHttpUrl().newBuilder()
             .addQueryParameter("workno", workno)
             .addQueryParameter("locale", language.locale)
             .build()
         return client.get(url, Fetch.XHR).parseAs<List<ProductDto>>().firstOrNull()
     }
 
-    override suspend fun getPageList(chapter: SChapter): List<Page> = throw Exception("Reading isn't implemented yet")
+    // One chapter per folder of images: some trials hold the pages once per language
+    private suspend fun trialChapters(product: ProductDto, trial: TrialFileDto, label: String): List<SChapter> {
+        val folders = trialFolders(trial.zipUrl)
+        return folders.mapIndexed { part, folder ->
+            SChapter.create().apply {
+                url = if (folders.size > 1) "/${trial.relativeUrl}/${part + 1}" else "/${trial.relativeUrl}"
+                name = buildList {
+                    add(label)
+                    // Folder names the zip stores in Shift-JIS don't decode
+                    if (folders.size > 1) add(folder.first().folder.substringAfterLast('/').takeUnless { it.isEmpty() || '\uFFFD' in it } ?: "${part + 1}")
+                }.joinToString(" - ")
+                date_upload = product.date
+                memo = buildJsonObject {
+                    put("zip", trial.zipUrl)
+                    put("part", part)
+                    put("workno", product.workno)
+                    put("site", product.siteId)
+                }
+            }
+        }
+    }
+
+    // The image folders in archive order, each in page order. A repeated name starts a new folder: Shift-JIS folder
+    // names can decode alike
+    private suspend fun trialFolders(zipUrl: String): List<List<Entry>> {
+        val images = client.zipDirectory(zipUrl).entries
+            .filter { IMAGE_REGEX.containsMatchIn(it.name) }
+            .sortedBy { it.localHeaderOffset }
+        return buildList<MutableList<Entry>> {
+            images.forEach { entry ->
+                val current = lastOrNull()
+                if (current != null && current.last().folder == entry.folder && current.none { it.name == entry.name }) current.add(entry) else add(mutableListOf(entry))
+            }
+        }.map { folder -> folder.sortedBy { entry -> NUMBER_REGEX.replace(entry.name.lowercase()) { it.value.padStart(10, '0') } } }
+    }
+
+    override fun getChapterUrl(chapter: SChapter): String {
+        if (chapter.memo["zip"] == null) return "https://$PLAY_HOST${chapter.url}"
+        return workUrl(chapter.memo.getString("workno"), chapter.memo["site"]?.stringOrNull)
+    }
+
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        chapter.memo["zip"]?.stringOrNull?.let { zipUrl ->
+            val folder = trialFolders(zipUrl).getOrNull(chapter.memo.getInt("part")) ?: throw Exception("Refresh the chapter list")
+            return folder.mapIndexed { index, entry ->
+                val data = TrialEntry(entry.name, entry.localHeaderOffset, entry.compressedSize, entry.method).toJsonString()
+                Page(index, imageUrl = "$zipUrl#$data")
+            }
+        }
+        return if (chapter.memo.getString("sample") == "epub") {
+            bookSamplePages(chapter.memo.getString("workno"))
+        } else {
+            chapter.memo.getArray("images").mapIndexed { index, image -> Page(index, imageUrl = image.string) }
+        }
+    }
+
+    private suspend fun bookSamplePages(workno: String): List<Page> {
+        val session = bookSampleSession(workno)
+        return client.get(session.token.url("viewer-meta.json"), Fetch.XHR.from(sampleViewerUrl(workno)))
+            .parseAs<ViewerMetaDto>()
+            .pages
+            .filter { it.type == "image" }
+            .mapIndexed { index, page -> Page(index, url = "${sampleViewerUrl(workno)}#${page.src}") }
+    }
+
+    // Signed again when the session the page list was made with has expired
+    override suspend fun getImageUrl(page: Page): String {
+        val url = page.url.toHttpUrl()
+        val session = bookSampleSession(url.pathSegments.last())
+        return session.token.url(url.fragment!!).newBuilder().fragment(session.key).build().toString()
+    }
+
+    private suspend fun bookSampleSession(workno: String): BookSampleSession = sessionMutex.withLock {
+        val current = bookSession
+        if (current != null && current.workno == workno && current.token.expiresAt > Clock.System.now() + SESSION_MARGIN) {
+            return@withLock current
+        }
+        val from = Fetch.XHR.from(sampleViewerUrl(workno))
+        val token = client.post("https://$PLAY_HOST/api/sample/viewer/token/$workno", from, RequestBody.EMPTY).parseAs<ViewerTokenDto>()
+        val key = client.get(token.url("decryption.key"), from).body.string().trim()
+        BookSampleSession(workno, token, key).also { bookSession = it }
+    }
+
+    private class BookSampleSession(val workno: String, val token: ViewerTokenDto, val key: String)
+
+    private fun sampleViewerUrl(workno: String) = "https://$PLAY_HOST/viewer/sample/$workno"
+
+    override val supportsRelatedMangas = true
+
+    // The work page's same-series, circle and label lists
+    override suspend fun fetchRelatedMangaList(manga: SManga): List<SManga> = coroutineScope {
+        client.get(getMangaUrl(manga), Fetch.DOCUMENT).asJsoup()
+            .select(RELATED_LISTS.joinToString { "[data-href*=/type/$it/]" })
+            .map { list -> async { client.get(list.absUrl("data-href"), Fetch.XHR).asJsoup() } }
+            .awaitAll()
+            .flatMap { it.select("li[data-prod]") }
+            .filter { it.selectFirst("[data-work_type]")?.attr("data-work_type") in READABLE_TYPES }
+            .map { item ->
+                toSManga(
+                    item.attr("data-prod"),
+                    item.selectFirst("a[href*=/product_id/]:not(.work_thumb)")!!,
+                    item.selectFirst("img-with-fallback")?.attr(":candidates"),
+                )
+            }
+            .distinctBy { it.url }
+            .filter { it.url != manga.url }
+    }
 
     override val supportsFilterFetching = true
 
-    override suspend fun fetchFilterData(): JsonElement = client.get("$baseUrl/maniax/genre/list?locale=${language.locale}", Fetch.DOCUMENT).asJsoup()
-        .select("a[href*=/works/genre/=/genre/]")
-        .map { GenreOption(it.text().replace(COUNT_REGEX, ""), it.attr("href").substringAfterLast('/')) }
-        .distinctBy { it.id }
-        .toJsonElement()
+    override suspend fun fetchFilterData(): JsonElement {
+        val url = "$baseUrl/maniax/genre/list".toHttpUrl().newBuilder().addQueryParameter("locale", language.locale).build()
+        return client.get(url, Fetch.DOCUMENT).asJsoup()
+            .select("a[href*=/works/genre/=/genre/]")
+            .map { GenreOption(it.text().replace(COUNT_REGEX, ""), it.absUrl("href").toHttpUrl().pathSegments.last()) }
+            .distinctBy { it.id }
+            .toJsonElement()
+    }
 
     override fun getFilterList(data: JsonElement?): FilterList {
         val genres = data?.parseAs<List<GenreOption>>().orEmpty()
@@ -133,23 +292,30 @@ abstract class DLsite : KeiSource() {
                 add(SectionFilter())
                 add(TypeFilter())
                 add(SortFilter())
-                add(FreeFilter())
+                add(NoAiFilter())
                 if (genres.isNotEmpty()) add(GenreFilter(genres))
             },
         )
     }
 
+    private val Entry.folder get() = name.substringBeforeLast('/', "")
+
     private class Language(val locale: String, val options: List<String>)
 
     companion object {
         private const val PAGE_SIZE = 30
+        private const val PLAY_HOST = "play.dlsite.com"
+        private const val TRIAL_HOST = "trial.dlsite.com"
+        private const val SAMPLE_CDN_HOST = "play.dl.dlsite.com"
+        private val SAMPLE_MEDIA_TYPE = "image/webp".toMediaType()
+        private val SESSION_MARGIN = 10.minutes
 
         // The site's locale for each source, and the language options of the works it lists
         private val LANGUAGES = mapOf(
             // Japanese works, and the ones that need no language
             "ja" to Language("ja_JP", listOf("JPN", "NM")),
             "en" to Language("en_US", listOf("ENG")),
-            "zh" to Language("zh_CN", listOf("CHI_HANS")),
+            "zh-Hans" to Language("zh_CN", listOf("CHI_HANS")),
             "zh-Hant" to Language("zh_TW", listOf("CHI_HANT")),
             "ko" to Language("ko_KR", listOf("KO_KR")),
             "es" to Language("es_ES", listOf("SPA")),
@@ -163,9 +329,16 @@ abstract class DLsite : KeiSource() {
         // Manga, CG and illustrations, webtoons
         private val READABLE_TYPES = setOf("MNG", "ICG", "WBT")
 
-        private val PRODUCT_PATH_REGEX = Regex("""^/([a-z-]+?)(?:-touch)?/(?:work|announce)/=/product_id/([A-Z]{2}\d+)""")
+        // AI-generated and AI-assisted works
+        val AI_OPTIONS = listOf("AIG", "AIP")
+
+        private val RELATED_LISTS = listOf("same_series", "maker_works", "label_works")
+
+        private val PRODUCT_PATH_REGEX = Regex("""/(?:[a-z-]+/(?:work|announce)/=/product_id/|(?:viewer/)?sample/)([A-Z]{2}\d+)(?:\.html)?""")
         private val CANDIDATE_REGEX = Regex("""'([^']+)'""")
         private val SIZE_SUFFIX_REGEX = Regex("""_\d+x\d+(?=\.\w+$)""")
         private val COUNT_REGEX = Regex("""\s*\([\d,.]+\)$""")
+        private val IMAGE_REGEX = Regex("""\.(?:jpe?g|png|webp|gif)$""", RegexOption.IGNORE_CASE)
+        private val NUMBER_REGEX = Regex("""\d+""")
     }
 }
