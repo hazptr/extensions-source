@@ -6,6 +6,7 @@ import eu.kanade.tachiyomi.source.model.UpdateStrategy
 import keiyoushi.utils.MarkdownDescription
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.tryParseDateTime
+import keiyoushi.zip.MAX_LOCAL_FILE_HEADER
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -193,6 +194,6 @@ class ViewerMetaDto(val pages: List<ViewerPageDto>)
 class ViewerPageDto(val type: String, val src: String)
 
 @Serializable
-class TrialEntry(val name: String, val offset: Long, val compressedSize: Long, val method: Int)
+class TrialEntry(val name: String, val offset: Long, val compressedSize: Long, val method: Int, val headerAllowance: Int = MAX_LOCAL_FILE_HEADER)
 
 private val DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT).withZone(ZoneId.of("Asia/Tokyo"))

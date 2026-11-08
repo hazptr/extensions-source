@@ -18,7 +18,6 @@ import keiyoushi.utils.attrOrNull
 import keiyoushi.utils.decodeHex
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getArray
-import keiyoushi.utils.getInt
 import keiyoushi.utils.getString
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.string
@@ -44,6 +43,7 @@ import okhttp3.RequestBody
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import java.nio.charset.Charset
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
 
@@ -168,19 +168,18 @@ abstract class DLsite : KeiSource() {
 
     // One chapter per folder of images: some trials hold the pages once per language
     private suspend fun trialChapters(product: ProductDto, trial: TrialFileDto, label: String): List<SChapter> {
-        val folders = trialFolders(trial.zipUrl)
-        return folders.mapIndexed { part, folder ->
+        val folders = trialFolders(trial.zipUrl).keys
+        return folders.map { folder ->
             SChapter.create().apply {
-                url = if (folders.size > 1) "/${trial.relativeUrl}/${part + 1}" else "/${trial.relativeUrl}"
+                url = if (folders.size > 1) "/${trial.relativeUrl}/$folder" else "/${trial.relativeUrl}"
                 name = buildList {
                     add(label)
-                    // Folder names the zip stores in Shift-JIS don't decode
-                    if (folders.size > 1) add(folder.first().folder.substringAfterLast('/').takeUnless { it.isEmpty() || '\uFFFD' in it } ?: "${part + 1}")
+                    if (folders.size > 1) add(folder.substringAfterLast('/').ifEmpty { "/" })
                 }.joinToString(" - ")
                 date_upload = product.date
                 memo = buildJsonObject {
                     put("zip", trial.zipUrl)
-                    put("part", part)
+                    put("folder", folder)
                     put("workno", product.workno)
                     put("site", product.siteId)
                 }
@@ -188,19 +187,12 @@ abstract class DLsite : KeiSource() {
         }
     }
 
-    // The image folders in archive order, each in page order. A repeated name starts a new folder: Shift-JIS folder
-    // names can decode alike
-    private suspend fun trialFolders(zipUrl: String): List<List<Entry>> {
-        val images = client.zipDirectory(zipUrl).entries
-            .filter { IMAGE_REGEX.containsMatchIn(it.name) }
-            .sortedBy { it.localHeaderOffset }
-        return buildList<MutableList<Entry>> {
-            images.forEach { entry ->
-                val current = lastOrNull()
-                if (current != null && current.last().folder == entry.folder && current.none { it.name == entry.name }) current.add(entry) else add(mutableListOf(entry))
-            }
-        }.map { folder -> folder.sortedBy { entry -> NUMBER_REGEX.replace(entry.name.lowercase()) { it.value.padStart(10, '0') } } }
-    }
+    // The image folders in archive order, each in page order. Trials made by Japanese tools store names in Shift-JIS
+    private suspend fun trialFolders(zipUrl: String): Map<String, List<Entry>> = client.zipDirectory(zipUrl, charset = SHIFT_JIS).entries
+        .filter { IMAGE_REGEX.containsMatchIn(it.name) }
+        .sortedBy { it.localHeaderOffset }
+        .groupBy { it.name.substringBeforeLast('/', "") }
+        .mapValues { (_, entries) -> entries.sortedBy { entry -> NUMBER_REGEX.replace(entry.name.lowercase()) { it.value.padStart(10, '0') } } }
 
     override fun getChapterUrl(chapter: SChapter): String {
         if (chapter.memo["zip"] == null) return "https://$PLAY_HOST${chapter.url}"
@@ -209,9 +201,9 @@ abstract class DLsite : KeiSource() {
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         chapter.memo["zip"]?.stringOrNull?.let { zipUrl ->
-            val folder = trialFolders(zipUrl).getOrNull(chapter.memo.getInt("part")) ?: throw Exception("Refresh the chapter list")
+            val folder = trialFolders(zipUrl)[chapter.memo.getString("folder")] ?: throw Exception("Refresh the chapter list")
             return folder.mapIndexed { index, entry ->
-                val data = TrialEntry(entry.name, entry.localHeaderOffset, entry.compressedSize, entry.method).toJsonString()
+                val data = TrialEntry(entry.name, entry.localHeaderOffset, entry.compressedSize, entry.method, entry.localHeaderAllowance).toJsonString()
                 Page(index, imageUrl = "$zipUrl#$data")
             }
         }
@@ -298,8 +290,6 @@ abstract class DLsite : KeiSource() {
         )
     }
 
-    private val Entry.folder get() = name.substringBeforeLast('/', "")
-
     private class Language(val locale: String, val options: List<String>)
 
     companion object {
@@ -340,5 +330,6 @@ abstract class DLsite : KeiSource() {
         private val COUNT_REGEX = Regex("""\s*\([\d,.]+\)$""")
         private val IMAGE_REGEX = Regex("""\.(?:jpe?g|png|webp|gif)$""", RegexOption.IGNORE_CASE)
         private val NUMBER_REGEX = Regex("""\d+""")
+        private val SHIFT_JIS = Charset.forName("MS932")
     }
 }

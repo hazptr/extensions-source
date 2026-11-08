@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.extension.all.dlsite
 import keiyoushi.utils.parseAs
 import keiyoushi.zip.dataRange
 import keiyoushi.zip.range
+import keiyoushi.zip.rangeSource
 import keiyoushi.zip.readEntry
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -20,12 +21,12 @@ class TrialInterceptor(private val host: String) : Interceptor {
         val entry = fragment.parseAs<TrialEntry>()
         val rangeRequest = request.newBuilder()
             .url(request.url.newBuilder().fragment(null).build())
-            .range(dataRange(entry.offset, entry.compressedSize))
+            .range(dataRange(entry.offset, entry.compressedSize, entry.headerAllowance))
             .build()
         val response = chain.proceed(rangeRequest)
         if (!response.isSuccessful) return response
 
-        val image = readEntry(response.body.source(), entry.compressedSize, entry.method).buffer()
+        val image = readEntry(response.rangeSource(), entry.compressedSize, entry.method).buffer()
         return response.newBuilder()
             .code(200)
             .message("OK")
