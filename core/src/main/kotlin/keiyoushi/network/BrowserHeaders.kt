@@ -101,6 +101,11 @@ internal fun BrowserCall.hop(request: Request): Request {
     fun fill(name: String, value: String?) {
         if (value != null && request.header(name) == null) builder.header(name, value)
     }
+    // A request WebView made has its headers already, but none of the HTTP/2 Priority, as it came over HTTP/1.1
+    if (request.tag(SentByBrowser::class.java) != null) {
+        fill("Priority", browser.priority(kind))
+        return builder.build()
+    }
 
     // Browsers send fetch metadata and client hints to secure origins only
     val secure = url.isSecure()
@@ -157,17 +162,18 @@ internal fun Request.inWireOrder(http2: Boolean): Request {
     val navigation = kind == Fetch.Kind.DOCUMENT
     val order = if (navigation) browser.documentOrder else browser.subresourceOrder
     val rank = { name: String -> order.indexOfFirst { it.equals(name, ignoreCase = true) }.takeIf { it >= 0 } ?: order.indexOf(SITE) }
+    val asSent = tag(SentByBrowser::class.java) != null
     val sorted = headers
-        .filterNot { (name, value) -> name.equals("Cache-Control", ignoreCase = true) && value.isAppCacheDirective() }
+        .filterNot { (name, value) -> !asSent && name.equals("Cache-Control", ignoreCase = true) && value.isAppCacheDirective() }
         .filter { (name) -> http2 || browser.priorityOnHttp1 || !name.equals("Priority", ignoreCase = true) }
         .map { (name, value) ->
             // Pages send application/json without a charset (axios, fetch with the type set)
-            val json = body != null && name.equals("Content-Type", ignoreCase = true)
+            val json = !asSent && body != null && name.equals("Content-Type", ignoreCase = true)
             name to if (json) value.replace(JSON_CHARSET, "") else value
         }
         .plus(if (http2 && browser.sendsTeTrailers) listOf("te" to "trailers") else emptyList())
         .let { list ->
-            val formSubmit = browser.formSubmitCacheControl?.takeIf { navigation && method == "POST" }
+            val formSubmit = browser.formSubmitCacheControl?.takeIf { !asSent && navigation && method == "POST" }
             val hasCacheControl = list.any { (name) -> name.equals("Cache-Control", ignoreCase = true) }
             if (formSubmit != null && !hasCacheControl) list + ("Cache-Control" to formSubmit) else list
         }

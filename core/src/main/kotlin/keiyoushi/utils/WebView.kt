@@ -3,14 +3,17 @@ package keiyoushi.utils
 import android.annotation.SuppressLint
 import android.content.res.Resources
 import android.graphics.Bitmap
+import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
+import android.webkit.HttpAuthHandler
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -21,6 +24,7 @@ import android.webkit.WebViewClient
 import keiyoushi.network.Fetch
 import keiyoushi.network.fetch
 import keiyoushi.webview.internal.WebViewGlueBridge
+import keiyoushi.webview.internal.WebViewProxy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +38,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Call
 import okhttp3.Headers.Companion.toHeaders
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -124,6 +129,12 @@ class WebViewScope<T> internal constructor(
     internal val refreshPages: MutableSet<String> = ConcurrentHashMap.newKeySet()
     internal val receivedErrorHooks = CopyOnWriteArrayList<(WebResourceRequest, WebResourceError) -> Unit>()
     private val bridgeNames = CopyOnWriteArraySet<String>()
+
+    // proxyHosts' route, and the load waiting for WebView to use it
+    @Volatile
+    internal var proxyRoute: WebViewProxy.Route? = null
+    private var proxyReady = true
+    private var pendingLoad: (() -> Unit)? = null
 
     @Volatile
     internal var interceptHook: ((WebResourceRequest) -> WebResourceResponse?)? = null
@@ -335,6 +346,45 @@ class WebViewScope<T> internal constructor(
     }
 
     /**
+     * Sends every request to [hosts] and their subdomains through [client] instead, including the frames, stylesheets,
+     * fonts and form posts [proxyRequest] leaves to WebView, with the headers and cookies WebView sent, minus the
+     * `X-Requested-With` Chrome never sends, and the [Fetch] of what each loads. [interceptor] sees each request first,
+     * like the first of [client]'s interceptors: it can change it or answer it without sending it. [client]'s rate limits
+     * and the app's Cloudflare handling are left out: WebView paces its own loads and shows the site's challenges.
+     * WebSockets and other hosts' requests pass through unchanged. Call it before [loadUrl] or [loadData].
+     *
+     * It uses a local proxy that all of the app's WebViews go through while the run lasts, without QUIC; service workers'
+     * requests to [hosts] fail. Where runs of several extensions route the same host at once, the last one's client
+     * sends it. Requires **Chromium 73+** (`PROXY_OVERRIDE`, see [proxyHostsSupported]). On older WebView versions it
+     * immediately fails ([reject]s).
+     */
+    fun proxyHosts(hosts: Set<String>, client: OkHttpClient, interceptor: Interceptor? = null) {
+        check(proxyRoute == null && !loaded.get()) { "proxyHosts must be called once, before a load" }
+        if (!proxyHostsSupported) {
+            return reject(UnsupportedOperationException("PROXY_OVERRIDE is not supported on this WebView (requires Chromium 73+)"))
+        }
+        proxyReady = false
+        proxyRoute = try {
+            WebViewProxy.open(hosts, client, interceptor) { applied ->
+                proxyReady = true
+                if (!applied) {
+                    reject(IllegalStateException("WebView didn't take the proxy"))
+                } else if (!destroyed) {
+                    pendingLoad?.invoke()
+                }
+                pendingLoad = null
+            }
+        } catch (e: IllegalStateException) {
+            proxyReady = true
+            return reject(e)
+        }
+    }
+
+    /** Whether [proxyHosts] is supported on this WebView. */
+    val proxyHostsSupported: Boolean
+        get() = WebViewGlueBridge.isProxyOverrideSupported()
+
+    /**
      * Injects `window.$name` exposing modern, asynchronous, origin-scoped 2-way messaging.
      * JavaScript sends: `window.$name.postMessage(message)`.
      * JavaScript receives: `window.$name.onmessage = (event) => ...`.
@@ -490,13 +540,13 @@ class WebViewScope<T> internal constructor(
     /** Loads [url]. Can only be called once per scope. */
     fun loadUrl(url: String, headers: Map<String, String> = emptyMap()) {
         markLoaded()
-        webView.loadUrl(url, headers)
+        whenProxyReady { webView.loadUrl(url, headers) }
     }
 
     /** Loads [html] as the page content, with [baseUrl] as its origin. Can only be called once per scope. */
     fun loadData(baseUrl: String, html: String, mimeType: String = "text/html") {
         markLoaded()
-        webView.loadDataWithBaseURL(baseUrl, html, mimeType, "UTF-8", null)
+        whenProxyReady { webView.loadDataWithBaseURL(baseUrl, html, mimeType, "UTF-8", null) }
     }
 
     /**
@@ -565,6 +615,11 @@ class WebViewScope<T> internal constructor(
         runOnMain { mainHandler.postDelayed(runnable, interval.inWholeMilliseconds) }
     }
 
+    // Loads run on the main thread, as do proxyHosts and its ready callback
+    private fun whenProxyReady(load: () -> Unit) = runOnMain {
+        if (proxyReady) load() else pendingLoad = load
+    }
+
     private fun markLoaded() {
         check(loaded.compareAndSet(false, true)) { "load already called on this WebViewScope" }
     }
@@ -619,6 +674,28 @@ private class ScopeWebViewClient(
         if (scope.destroyed) return
         if (request != null && error != null) {
             scope.receivedErrorHooks.forEach { it(request, error) }
+        }
+    }
+
+    // Only the proxy's own credentials, on a WebView it proxies
+    override fun onReceivedHttpAuthRequest(view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?) {
+        val route = scope.proxyRoute?.takeUnless { scope.destroyed }
+        if (route != null && route.asks(host, realm)) {
+            handler?.proceed(route.username, route.password)
+        } else {
+            super.onReceivedHttpAuthRequest(view, handler, host, realm)
+        }
+    }
+
+    // Proceeds only for the proxy's own certificate
+    @SuppressLint("WebViewClientOnReceivedSslError")
+    override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+        val route = scope.proxyRoute?.takeUnless { scope.destroyed }
+        val certificate = error?.certificate
+        if (route != null && certificate != null && route.presents(certificate)) {
+            handler?.proceed()
+        } else {
+            super.onReceivedSslError(view, handler, error)
         }
     }
 
@@ -720,6 +797,7 @@ suspend fun <T> runWebView(
         }
     } finally {
         scope.destroyed = true
+        scope.proxyRoute?.let(WebViewProxy::close)
         runCatching { (webView.parent as? ViewGroup)?.removeView(webView) }
         webView.stopLoading()
         webView.destroy()
