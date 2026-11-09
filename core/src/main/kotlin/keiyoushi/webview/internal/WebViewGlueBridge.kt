@@ -11,7 +11,6 @@ import keiyoushi.utils.ScriptHandle
 import keiyoushi.utils.WebMessageReplyProxy
 import org.chromium.support_lib_boundary.JsReplyProxyBoundaryInterface
 import org.chromium.support_lib_boundary.ProfileBoundaryInterface
-import org.chromium.support_lib_boundary.ProxyControllerBoundaryInterface
 import org.chromium.support_lib_boundary.ScriptHandlerBoundaryInterface
 import org.chromium.support_lib_boundary.WebMessageBoundaryInterface
 import org.chromium.support_lib_boundary.WebMessagePayloadBoundaryInterface
@@ -21,7 +20,6 @@ import org.chromium.support_lib_boundary.WebViewProviderFactoryBoundaryInterface
 import org.chromium.support_lib_boundary.WebkitToCompatConverterBoundaryInterface
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Proxy
-import java.util.concurrent.Executor
 
 internal object WebViewGlueBridge {
 
@@ -107,31 +105,6 @@ internal object WebViewGlueBridge {
         profile.addOriginMatchedHeader(headerName, headerValue, originRules)
         return true
     }
-
-    fun isProxyOverrideSupported(): Boolean = isFeatureSupported("PROXY_OVERRIDE:3")
-
-    /**
-     * Sends all of the app's WebView requests through `127.0.0.1:`[port]; [onApplied] runs on the main thread once they
-     * do. Callers are on the main thread, where a throw would crash the app.
-     */
-    fun setProxyOverride(port: Int, onApplied: () -> Unit): Boolean = try {
-        val rules = arrayOf(arrayOf("*", "http://127.0.0.1:$port"))
-        proxyController.setProxyOverride(rules, emptyArray(), Runnable(onApplied), Executor(mainHandler::post))
-        true
-    } catch (e: Throwable) {
-        Log.e("WebViewGlueBridge", "setProxyOverride", e)
-        false
-    }
-
-    fun clearProxyOverride() {
-        try {
-            proxyController.clearProxyOverride(Runnable {}, Executor(mainHandler::post))
-        } catch (e: Throwable) {
-            Log.e("WebViewGlueBridge", "clearProxyOverride", e)
-        }
-    }
-
-    private val proxyController by lazy { factory.proxyController.asBoundary<ProxyControllerBoundaryInterface>() }
 
     // The add* functions below return null/false only when the feature is unavailable, so callers
     // can fall back. Errors from WebView itself (e.g. IllegalArgumentException for an invalid

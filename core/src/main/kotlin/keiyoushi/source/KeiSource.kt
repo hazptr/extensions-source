@@ -3,6 +3,7 @@ package keiyoushi.source
 import android.util.Log
 import com.squareup.zstd.okio.zstdCompress
 import com.squareup.zstd.okio.zstdDecompress
+import eu.kanade.tachiyomi.network.LocalProxy
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -23,6 +24,7 @@ import keiyoushi.network.kind
 import keiyoushi.utils.applicationContext
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.jsonInstance
+import keiyoushi.webview.internal.AppProxy
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -485,6 +487,19 @@ abstract class KeiSource : HttpSource() {
      * @return The absolute URL of the chapter.
      */
     override fun getChapterUrl(chapter: SChapter): String = baseUrl + chapter.url
+
+    /**
+     * The hosts, subdomains included, whose requests from the app's own WebView opened for this source go through
+     * [client], the way [keiyoushi.utils.WebViewScope.proxyHosts] sends a run's. Empty, the default, leaves that WebView
+     * alone. Needs an app with a WebView proxy (tachiyomix 1.7); while it's open, all of the app's WebViews use it.
+     */
+    protected open val webViewProxyHosts: Set<String> get() = emptySet()
+
+    /** Called by the app before loading its WebView for this source; returns once WebView uses the proxy. */
+    override suspend fun openWebViewProxy(): LocalProxy? {
+        val hosts = webViewProxyHosts.ifEmpty { return null }
+        return AppProxy.route(AppProxy.proxy ?: return null, hosts, client, null)
+    }
 
     /**
      * Get the list of pages a chapter has. Pages should be returned

@@ -21,13 +21,19 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import eu.kanade.tachiyomi.network.LocalProxy
 import keiyoushi.network.Fetch
 import keiyoushi.network.fetch
+import keiyoushi.webview.internal.AppProxy
 import keiyoushi.webview.internal.WebViewGlueBridge
-import keiyoushi.webview.internal.WebViewProxy
+import keiyoushi.webview.internal.asks
+import keiyoushi.webview.internal.presents
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -132,7 +138,8 @@ class WebViewScope<T> internal constructor(
 
     // proxyHosts' route, and the load waiting for WebView to use it
     @Volatile
-    internal var proxyRoute: WebViewProxy.Route? = null
+    internal var proxyRoute: LocalProxy? = null
+    internal var proxyJob: Job? = null
     private var proxyReady = true
     private var pendingLoad: (() -> Unit)? = null
 
@@ -353,36 +360,35 @@ class WebViewScope<T> internal constructor(
      * and the app's Cloudflare handling are left out: WebView paces its own loads and shows the site's challenges.
      * WebSockets and other hosts' requests pass through unchanged. Call it before [loadUrl] or [loadData].
      *
-     * It uses a local proxy that all of the app's WebViews go through while the run lasts, without QUIC; service workers'
-     * requests to [hosts] fail. Where runs of several extensions route the same host at once, the last one's client
-     * sends it. Requires **Chromium 73+** (`PROXY_OVERRIDE`, see [proxyHostsSupported]). On older WebView versions it
-     * immediately fails ([reject]s).
+     * It uses the app's WebView proxy, which all of the app's WebViews go through while the run lasts, without QUIC;
+     * service workers' requests to [hosts] fail. Where several routes take the same host at once, the last one's client
+     * sends it. Requires an app with a WebView proxy (tachiyomix 1.7) and **Chromium 73+**, see [proxyHostsSupported].
+     * Without them it immediately fails ([reject]s).
      */
+    @OptIn(DelicateCoroutinesApi::class)
     fun proxyHosts(hosts: Set<String>, client: OkHttpClient, interceptor: Interceptor? = null) {
-        check(proxyRoute == null && !loaded.get()) { "proxyHosts must be called once, before a load" }
-        if (!proxyHostsSupported) {
-            return reject(UnsupportedOperationException("PROXY_OVERRIDE is not supported on this WebView (requires Chromium 73+)"))
-        }
+        check(proxyRoute == null && proxyJob == null && !loaded.get()) { "proxyHosts must be called once, before a load" }
+        val proxy = AppProxy.proxy
+            ?: return reject(UnsupportedOperationException("The app has no WebView proxy (tachiyomix 1.7) or WebView can't be proxied"))
         proxyReady = false
-        proxyRoute = try {
-            WebViewProxy.open(hosts, client, interceptor) { applied ->
+        proxyJob = GlobalScope.launch(Dispatchers.Main) {
+            val route = try {
+                AppProxy.route(proxy, hosts, client, interceptor)
+            } catch (e: Exception) {
                 proxyReady = true
-                if (!applied) {
-                    reject(IllegalStateException("WebView didn't take the proxy"))
-                } else if (!destroyed) {
-                    pendingLoad?.invoke()
-                }
-                pendingLoad = null
+                return@launch reject(e)
             }
-        } catch (e: IllegalStateException) {
+            if (destroyed) return@launch route.close()
+            proxyRoute = route
             proxyReady = true
-            return reject(e)
+            pendingLoad?.invoke()
+            pendingLoad = null
         }
     }
 
-    /** Whether [proxyHosts] is supported on this WebView. */
+    /** Whether [proxyHosts] is supported here: the app has a WebView proxy and WebView can be proxied. */
     val proxyHostsSupported: Boolean
-        get() = WebViewGlueBridge.isProxyOverrideSupported()
+        get() = AppProxy.proxy != null
 
     /**
      * Injects `window.$name` exposing modern, asynchronous, origin-scoped 2-way messaging.
@@ -797,7 +803,8 @@ suspend fun <T> runWebView(
         }
     } finally {
         scope.destroyed = true
-        scope.proxyRoute?.let(WebViewProxy::close)
+        scope.proxyJob?.cancel()
+        scope.proxyRoute?.close()
         runCatching { (webView.parent as? ViewGroup)?.removeView(webView) }
         webView.stopLoading()
         webView.destroy()
