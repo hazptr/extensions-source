@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowManager
 import android.webkit.WebView
+import keiyoushi.network.chromeUserAgentOf
 import keiyoushi.utils.ui.onDestroyed
 import keiyoushi.utils.ui.topActivity
 import keiyoushi.utils.ui.usable
@@ -53,7 +54,7 @@ suspend fun getTurnstileToken(
 
     return try {
         runWebView(timeout = timeout) {
-            (userAgent ?: reducedChromeUserAgent(this.userAgent))?.let { this.userAgent = it }
+            (userAgent ?: chromeUserAgentOf(this.userAgent))?.let { this.userAgent = it }
 
             val d = CaptchaOverlayDialog(
                 webView = webView,
@@ -162,12 +163,6 @@ suspend fun getTurnstileToken(
     } finally {
         dialog?.dismiss()
     }
-}
-
-// The WebView's default UA carries "; wv" and "Version/4.0"; real Chrome sends this reduced form.
-private fun reducedChromeUserAgent(webViewUserAgent: String): String? {
-    val major = Regex("""Chrome/(\d+)""").find(webViewUserAgent)?.groupValues?.get(1) ?: return null
-    return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$major.0.0.0 Mobile Safari/537.36"
 }
 
 private fun foregroundActivity(): Activity? = runCatching { topActivity() }.getOrNull()?.takeIf { it.usable() }

@@ -1,6 +1,8 @@
 package keiyoushi.network
 
 import android.os.LocaleList
+import android.webkit.WebSettings
+import keiyoushi.utils.applicationContext
 import okhttp3.Headers
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -357,6 +359,36 @@ internal sealed class Browser {
             else -> null
         }
     }
+}
+
+/** Which user agent a source's requests send. */
+enum class UserAgent {
+    /** The app's, as the user set it. */
+    APP,
+
+    /** [webViewChromeUserAgent], the Chrome version WebView's and lib:cronet's TLS and headers match. */
+    WEBVIEW_CHROME,
+}
+
+/**
+ * The user agent of a Chrome as new as the device's WebView, in Chrome's reduced Android form: the version WebView's and
+ * Cronet's TLS and headers match. Null without a WebView.
+ */
+val webViewChromeUserAgent: String? by lazy {
+    // Throws where there's no WebView, such as Suwayomi
+    val engine = try {
+        WebSettings.getDefaultUserAgent(applicationContext)
+    } catch (_: Throwable) {
+        return@lazy null
+    }
+    chromeUserAgentOf(engine)
+}
+
+/** Chrome's reduced Android user agent for a WebView with user agent [engine]. */
+internal fun chromeUserAgentOf(engine: String): String? {
+    val version = chromeVersion(engine) ?: return null
+    val mobile = if (" Mobile " in engine) " Mobile" else ""
+    return "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$version.0.0.0$mobile Safari/537.36"
 }
 
 /** Chromium's `Sec-CH-UA` brand list for [version], its placeholder brand included. */
