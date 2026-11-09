@@ -34,9 +34,20 @@ class BrowserHeadersTest {
     }
 
     @Test
+    fun chromeUserAgentOfTheWebView() {
+        val phone = "Mozilla/5.0 (Linux; Android 11; ONEPLUS A6003 Build/RKQ1.201217.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/156.0.8078.47 Mobile Safari/537.36"
+        assertEquals("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36", chromeUserAgentOf(phone))
+        val tablet = phone.replace(" Mobile ", " ")
+        assertEquals("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36", chromeUserAgentOf(tablet))
+        assertNull(chromeUserAgentOf("Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0"))
+    }
+
+    @Test
     fun brandsMatchChrome() {
         assertEquals("\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"", chromeBrands(155))
         assertEquals("\"Not_A Brand\";v=\"8\", \"Chromium\";v=\"120\", \"Google Chrome\";v=\"120\"", chromeBrands(120))
+        // Chrome 156 on Android
+        assertEquals("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"", chromeBrands(156))
     }
 
     @Test

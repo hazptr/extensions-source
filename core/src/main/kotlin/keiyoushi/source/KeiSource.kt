@@ -18,8 +18,10 @@ import keiyoushi.network.CacheControlInterceptor
 import keiyoushi.network.Deflate
 import keiyoushi.network.Fetch
 import keiyoushi.network.RateLimitInterceptor
+import keiyoushi.network.UserAgent
 import keiyoushi.network.fetch
 import keiyoushi.network.kind
+import keiyoushi.network.webViewChromeUserAgent
 import keiyoushi.utils.applicationContext
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.jsonInstance
@@ -114,6 +116,20 @@ abstract class KeiSource : HttpSource() {
                 }
             }
 
+            // Before the app's own, which gives requests without one the app's, and before Cloudflare's, which solves
+            // with the request's
+            replacedUserAgent()?.let { userAgent ->
+                val index = interceptors().indexOfFirst { it.javaClass.simpleName == "UserAgentInterceptor" }
+                interceptors().add(index) { chain ->
+                    val request = chain.request()
+                    if (request.header("User-Agent").isNullOrEmpty()) {
+                        chain.proceed(request.newBuilder().header("User-Agent", userAgent).build())
+                    } else {
+                        chain.proceed(request)
+                    }
+                }
+            }
+
             // first, so source interceptors only see the fetched url
             fetchableBaseUrl?.let { preferences ->
                 addInterceptor(BaseUrlFetchInterceptor({ baseUrl }) { fetchBaseUrlsBlocking(preferences) })
@@ -194,9 +210,23 @@ abstract class KeiSource : HttpSource() {
      */
     protected open fun Headers.Builder.configureHeaders(): Headers.Builder = this
 
+    /**
+     * The user agent the source's requests send, on [headers] and on requests without them: [UserAgent.APP] by default.
+     * Sources whose requests go out through WebView or lib:cronet can send [UserAgent.WEBVIEW_CHROME], the Chrome
+     * version their TLS and WebView's own requests show, in place of the app's and the one the user set there.
+     */
+    protected open val userAgent: UserAgent get() = UserAgent.APP
+
     final override fun headersBuilder() = super.headersBuilder()
+        .apply { replacedUserAgent()?.let { set("User-Agent", it) } }
         .set("Referer", "$baseUrl/")
         .configureHeaders()
+
+    // The user agent in place of the app's, or null to keep it
+    private fun replacedUserAgent(): String? = when (userAgent) {
+        UserAgent.APP -> null
+        UserAgent.WEBVIEW_CHROME -> webViewChromeUserAgent
+    }
 
     /**
      * Fetches a page of popular manga from the source.
