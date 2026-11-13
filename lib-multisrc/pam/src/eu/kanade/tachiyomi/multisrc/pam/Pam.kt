@@ -1,8 +1,5 @@
 package eu.kanade.tachiyomi.multisrc.pam
 
-import androidx.preference.PreferenceScreen
-import androidx.preference.SwitchPreferenceCompat
-import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
@@ -15,7 +12,6 @@ import keiyoushi.utils.MarkdownDescription
 import keiyoushi.utils.WebViewScope
 import keiyoushi.utils.applicationContext
 import keiyoushi.utils.firstInstanceOrNull
-import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,13 +36,7 @@ import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
-abstract class Pam :
-    KeiSource(),
-    ConfigurableSource {
-
-    private val preferences by getPreferencesLazy {
-        if (contains(OLD_HIDE_PREMIUM_PREF)) edit().remove(OLD_HIDE_PREMIUM_PREF).apply()
-    }
+abstract class Pam : KeiSource() {
 
     protected val intl = Intl(
         language = lang,
@@ -174,9 +164,7 @@ abstract class Pam :
         // Ages are rounded down to days, weeks, months or years, so a chapter keeps the date it was first stored with
         val stored = known.associate { it.url to it.date_upload }
         val now = System.currentTimeMillis()
-        val showPremium = preferences.getBoolean(SHOW_PREMIUM_PREF, false)
         val chapters = rows.values
-            .filter { showPremium || !it.premium }
             .map { row ->
                 SChapter.create().apply {
                     url = row.path
@@ -269,15 +257,6 @@ abstract class Pam :
         .message("OK")
         .body(file.source().buffer().asResponseBody(type.toMediaType(), file.length()))
         .build()
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        SwitchPreferenceCompat(screen.context).apply {
-            key = SHOW_PREMIUM_PREF
-            title = intl["pref_show_premium_title"]
-            summary = intl["pref_show_premium_summary"]
-            setDefaultValue(false)
-        }.also(screen::addPreference)
-    }
 }
 
 private const val SETTLE_MS = 4000
@@ -287,8 +266,6 @@ private const val MAX_CAPTURES = 2
 private val PAGE_TIMEOUT = 30.minutes
 private const val TAP_WAIT_MS = 1200L
 private const val SWIPE_WAIT_MS = 900L
-private const val SHOW_PREMIUM_PREF = "pref_show_premium_chapters"
-private const val OLD_HIDE_PREMIUM_PREF = "pref_hide_premium_chapters"
 
 // The site's age formats, in the device's language: en "3 d", fr "3 j / 1 sem.", es "1 mes", de "3 T."; " min" and " h" in all
 private val AGE_REGEX = Regex("""(\d+) (\S+)""")
