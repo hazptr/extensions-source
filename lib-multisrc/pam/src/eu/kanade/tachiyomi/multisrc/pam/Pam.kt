@@ -31,6 +31,7 @@ import okio.buffer
 import okio.source
 import java.io.File
 import java.io.IOException
+import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
@@ -163,7 +164,7 @@ abstract class Pam : KeiSource() {
 
         // Ages are rounded down to days, weeks, months or years, so a chapter keeps the date it was first stored with
         val stored = known.associate { it.url to it.date_upload }
-        val now = System.currentTimeMillis()
+        val now = Clock.System.now().toEpochMilliseconds()
         val chapters = rows.values
             .map { row ->
                 SChapter.create().apply {
