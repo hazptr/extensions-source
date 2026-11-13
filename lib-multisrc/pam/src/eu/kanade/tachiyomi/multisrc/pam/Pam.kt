@@ -35,6 +35,7 @@ import okio.buffer
 import okio.source
 import java.io.File
 import java.io.IOException
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
@@ -56,6 +57,8 @@ abstract class Pam :
 
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = apply {
         addInterceptor(::pageInterceptor)
+        // A page waits while the chapter is read through the site's reader, up to PAGE_TIMEOUT
+        callTimeout(Duration.ZERO)
     }
 
     private val siteView = SiteView(baseUrl) { headers["User-Agent"]!! }
@@ -215,8 +218,7 @@ abstract class Pam :
     }
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val capture = capture(getChapterUrl(chapter).toHttpUrl().encodedPath, 0)
-        val count = capture.pageCount.await()
+        val count = capture(getChapterUrl(chapter).toHttpUrl().encodedPath).pages.await().size
         return List(count) { index ->
             Page(index, imageUrl = "${getChapterUrl(chapter)}#$PAGE_FRAGMENT$index")
         }
@@ -226,14 +228,14 @@ abstract class Pam :
 
     private val captures = linkedMapOf<String, ChapterCapture>()
 
-    /** The chapter's open reader that can still deliver page [index], or a new one starting there. */
+    /** The chapter's capture, a new one if it has none or the last one failed. */
     @Synchronized
-    private fun capture(chapterPath: String, index: Int): ChapterCapture {
-        captures[chapterPath]?.takeIf { it.covers(index) }?.let { return it }
+    private fun capture(chapterPath: String): ChapterCapture {
+        captures[chapterPath]?.takeUnless { it.pages.isCancelled }?.let { return it }
         captures.remove(chapterPath)?.close()
         while (captures.size >= MAX_CAPTURES) captures.remove(captures.keys.first())?.close()
-        val dir = File(applicationContext.cacheDir, "pam-pages/${chapterPath.hashCode().toUInt()}-$index")
-        return ChapterCapture("$baseUrl$chapterPath", index, siteView, dir, captureScope).also { captures[chapterPath] = it }
+        val dir = File(applicationContext.cacheDir, "pam-pages/${chapterPath.hashCode().toUInt()}")
+        return ChapterCapture("$baseUrl$chapterPath", siteView, dir, captureScope).also { captures[chapterPath] = it }
     }
 
     private val covers = Covers(baseUrl, File(applicationContext.cacheDir, "pam-covers/$id"), captureScope) { headers["User-Agent"]!! }
@@ -248,7 +250,9 @@ abstract class Pam :
         }
         val index = request.url.fragment?.takeIf { it.startsWith(PAGE_FRAGMENT) }?.removePrefix(PAGE_FRAGMENT)?.toIntOrNull()
             ?: return chain.proceed(request)
-        val file = awaitFile { capture(request.url.encodedPath, index).page(index).await() }
+        val file = awaitFile {
+            capture(request.url.encodedPath).pages.await().getOrNull(index) ?: throw IOException("The chapter's pages changed, reload it")
+        }
         return fileResponse(request, file, "image/jpeg")
     }
 
@@ -280,7 +284,7 @@ private const val SETTLE_MS = 4000
 private const val PAGE_FRAGMENT = "pam-page-"
 private const val COVER_FRAGMENT = "pam-cover"
 private const val MAX_CAPTURES = 2
-private val PAGE_TIMEOUT = 5.minutes
+private val PAGE_TIMEOUT = 30.minutes
 private const val TAP_WAIT_MS = 1200L
 private const val SWIPE_WAIT_MS = 900L
 private const val SHOW_PREMIUM_PREF = "pref_show_premium_chapters"

@@ -89,14 +89,15 @@ internal class Surface private constructor(private val webView: WebView) {
     }
 
     /**
-     * Copies rows [top] until [bottom] and columns [left] until [right] (frame pixels) into a new bitmap once two frames in
-     * a row agree there and it shows no unpainted stretch, then calls [done] on the main thread with it, or null if it can't.
+     * Copies rows [top] until [bottom] and columns [left] until [right] (frame pixels) into a new bitmap once two reads in
+     * a row agree there and nothing is left to paint, then calls [done] on the main thread with it, or null if it can't.
      */
     fun copy(left: Int, top: Int, right: Int, bottom: Int, done: (Bitmap?) -> Unit) {
         fun finish(segment: Bitmap?) = mainHandler.post { done(segment) }
-        fun attempt(round: Int, previous: Long?) {
+        fun attempt(round: Int, previous: Long?, same: Int) {
             val after = frames
-            mainHandler.post { webView.invalidate() }
+            // One fresh frame to start from; after that only the page's own painting makes new ones
+            if (round == 0) mainHandler.post { webView.invalidate() }
             fun read(poll: Int) {
                 if (frames == after && poll < FRAME_POLLS) {
                     frameHandler.postDelayed({ read(poll + 1) }, FRAME_POLL_MS)
@@ -108,17 +109,20 @@ internal class Surface private constructor(private val webView: WebView) {
                     return
                 }
                 val print = image.fingerprint(left, top, right, bottom)
-                // Tiles still being painted after a scroll show as black and change from frame to frame
-                val settled = print == previous && !image.hasBlankStretch(left, top, right, bottom)
+                val unchanged = if (print == previous) same + 1 else 0
+                // Tiles still being painted after a scroll show as black until a later frame fills them in; with no new frame
+                // coming the page is done painting, and black there is the art's own
+                val idle = frames == after
+                val settled = unchanged >= 1 && (idle || unchanged >= BLANK_PATIENCE || !image.hasBlankStretch(left, top, right, bottom))
                 if (!settled && round < SETTLE_ROUNDS) {
-                    frameHandler.postDelayed({ attempt(round + 1, print) }, SETTLE_MS)
+                    frameHandler.postDelayed({ attempt(round + 1, print, unchanged) }, SETTLE_MS)
                     return
                 }
                 finish(image.copyRows(left, top, right, bottom))
             }
             read(0)
         }
-        frameHandler.post { attempt(0, null) }
+        frameHandler.post { attempt(0, null, 0) }
     }
 
     /** A sample of the region's pixels, to tell whether two frames show the same thing there. */
@@ -163,8 +167,9 @@ internal class Surface private constructor(private val webView: WebView) {
         }.slice()
         val rows = Bitmap.createBitmap(plane.rowStride / plane.pixelStride, bottom - top, Bitmap.Config.ARGB_8888)
         rows.copyPixelsFromBuffer(buffer)
+        if (left == 0 && right == rows.width) return rows
         val segment = Bitmap.createBitmap(rows, left, 0, right - left, bottom - top)
-        if (segment !== rows) rows.recycle()
+        rows.recycle()
         return segment
     }
 
@@ -189,8 +194,9 @@ internal class Surface private constructor(private val webView: WebView) {
 
 private const val FRAME_POLL_MS = 20L
 private const val FRAME_POLLS = 8
-private const val SETTLE_ROUNDS = 30
-private const val SETTLE_MS = 100L
+private const val SETTLE_ROUNDS = 50
+private const val SETTLE_MS = 60L
+private const val BLANK_PATIENCE = 5
 
 // Unpainted tiles are at least this tall; a black panel this tall is copied after the last round anyway
 private const val BLANK_ROWS = 48

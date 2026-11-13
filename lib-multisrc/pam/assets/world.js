@@ -2,10 +2,7 @@
 (bridge, read) => {
     const channel = window[bridge];
     let postedAt = 0;
-    channel.onmessage = () => {
-        postedAt = 0;
-    };
-    setInterval(() => {
+    const tick = () => {
         // A read whose answer never came (the app was busy, or dropped it) is posted again
         if (postedAt && Date.now() - postedAt < 5000) return;
         let snapshot;
@@ -17,5 +14,11 @@
         if (snapshot === null) return;
         postedAt = Date.now();
         channel.postMessage(JSON.stringify(snapshot));
-    }, 150);
+    };
+    // The next read follows the answer straight away
+    channel.onmessage = () => {
+        postedAt = 0;
+        tick();
+    };
+    setInterval(tick, 150);
 }

@@ -14,24 +14,35 @@ import kotlin.random.Random
 
 /**
  * Swipes from ([fromX], [fromY]) to ([toX], [toY]) in CSS pixels at [scale] device pixels each, the way a finger does:
- * about half a second, starting slowly and tailing off, with a fingertip's contact. Stops when the run ends.
+ * about half a second, starting slowly and tailing off, with a fingertip's contact. The finger rests a moment before it
+ * lifts, so the page stops where the swipe ends instead of flinging on. A [brisk] swipe is a reader's quicker one on a page
+ * already drawn. Calls [lifted] once the finger is up.
  */
-internal fun WebViewScope<*>.swipe(scale: Float, fromX: Float, fromY: Float, toX: Float, toY: Float) {
-    val frames = Random.nextInt(25, 37)
+internal fun WebViewScope<*>.swipe(
+    scale: Float,
+    fromX: Float,
+    fromY: Float,
+    toX: Float,
+    toY: Float,
+    brisk: Boolean = false,
+    lifted: () -> Unit = {},
+) {
+    val frames = if (brisk) Random.nextInt(14, 20) else Random.nextInt(25, 37)
+    val rest = Random.nextInt(5, 8)
     val finger = Finger(scale)
     val handler = Handler(Looper.getMainLooper())
 
     fun send(frame: Int) {
         val action = when (frame) {
             0 -> MotionEvent.ACTION_DOWN
-            frames + 1 -> MotionEvent.ACTION_UP
+            frames + rest + 1 -> MotionEvent.ACTION_UP
             else -> MotionEvent.ACTION_MOVE
         }
         val progress = 1 - (1 - (frame.coerceAtMost(frames).toFloat() / frames).pow(1.6f)).pow(4)
         finger.send(this, action, fromX + (toX - fromX) * progress, fromY + (toY - fromY) * progress)
-        if (frame <= frames) handler.postDelayed({ send(frame + 1) }, Random.nextLong(14, 19))
+        if (frame <= frames + rest) handler.postDelayed({ send(frame + 1) }, Random.nextLong(14, 19)) else lifted()
     }
-    whenDrawn { send(0) }
+    if (brisk) send(0) else whenDrawn { send(0) }
 }
 
 /** Taps ([x], [y]) in CSS pixels at [scale] device pixels each, the way a finger does: a short press that barely moves. */

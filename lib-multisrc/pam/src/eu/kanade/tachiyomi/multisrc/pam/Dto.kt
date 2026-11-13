@@ -80,21 +80,16 @@ internal class ReaderPage(
     val scale: Float,
     val height: Float,
     val clear: List<Band>,
-    val plates: List<Plate>,
+    val reader: Box? = null,
+    val reload: Point? = null,
+    val ads: List<Band> = emptyList(),
     val gate: String? = null,
     val dismiss: Point? = null,
 ) {
     @Serializable
     class Band(val top: Float, val bottom: Float)
 
+    /** The reader's box in CSS pixels on screen; [id] stays the same while it is the same element. */
     @Serializable
-    class Plate(
-        val top: Float,
-        val left: Float,
-        val width: Float,
-        val height: Float,
-        val drawn: Boolean,
-        val canvasWidth: Int,
-        val retry: Point?,
-    )
+    class Box(val id: Int, val top: Float, val left: Float, val width: Float, val height: Float)
 }
