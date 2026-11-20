@@ -2,11 +2,12 @@ package eu.kanade.tachiyomi.extension.en.toonkotsu
 
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
-import keiyoushi.utils.MarkdownDescription
+import keiyoushi.utils.describe
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 
@@ -80,14 +81,15 @@ class SeriesDto(
 
     fun toSMangaDetails(baseUrl: String, showSpoilerTags: Boolean, showAdult: Boolean, mangabaka: MangabakaDto) = toSManga(baseUrl, showSpoilerTags).apply {
         val sources = mangabaka.sources
-        description = MarkdownDescription.Builder().apply {
+        val year = year ?: mangabaka.year
+        val volumes = mangabaka.finalVolume ?: muStatus?.let { VOLUMES_REGEX.find(it)?.groupValues?.get(1) }
+        // The site counts chapters only once a series has ended
+        val chapters = mangabaka.totalChapters?.takeIf { mangabaka.status == "completed" || mangabaka.status == "cancelled" }
+        describe {
             rating(score?.div(10.0))
-            info(
-                (year ?: mangabaka.year)?.toString(),
-                (mangabaka.finalVolume ?: muStatus?.let { VOLUMES_REGEX.find(it)?.groupValues?.get(1) })?.let { "$it volumes" },
-                // The site counts chapters only once a series has ended
-                mangabaka.totalChapters?.takeIf { mangabaka.status == "completed" || mangabaka.status == "cancelled" }?.let { "$it chapters" },
-            )
+            field("Year", year?.toString(), summary = true)
+            field("Volumes", volumes)
+            field("Chapters", chapters)
             markdown(this@SeriesDto.description?.takeIf { it.isNotBlank() } ?: mangabaka.description)
             field("Magazines", magazines.map { it.name })
             links(listOfNotNull(editionOf).map { it.toLink(baseUrl) }, label = "Edition of")
@@ -108,13 +110,17 @@ class SeriesDto(
                     "Anime-Planet" to sources?.animePlanet?.id?.let { "https://www.anime-planet.com/manga/$it" },
                     "Shikimori" to sources?.shikimori?.id?.let { "https://shikimori.io/mangas/$it" },
                     "Anime News Network" to sources?.animeNewsNetwork?.id?.let { "https://www.animenewsnetwork.com/encyclopedia/manga.php?id=$it" },
-                ) + listOfNotNull(
-                    // Adaptations with `via` belong to a related series
+                ),
+            )
+            // Adaptations with `via` belong to a related series
+            links(
+                listOfNotNull(
                     adaptation?.takeIf { it.via == null }?.let {
                         val about = listOfNotNull(it.format?.replace('_', ' '), it.year).joinToString().ifEmpty { null }
                         listOfNotNull("Anime", about?.let { "($it)" }).joinToString(" ") to "https://anilist.co/anime/${it.id}"
                     },
                 ),
+                label = "Adaptation",
             )
             altTitles(
                 (
@@ -122,7 +128,16 @@ class SeriesDto(
                         alt + mangabaka.titles.map { it.title }
                     ).filter { it.trim() != title },
             )
-        }.build()
+            meta {
+                field("Type", type, summary = true)
+                field("Demographic", tags.firstOrNull(DEMOGRAPHICS::contains))
+                field("Original language", originalLanguage?.let { Locale.forLanguageTag(it).getDisplayLanguage(Locale.ENGLISH) }, summary = true)
+                field("Original title", titles?.native ?: mangabaka.nativeTitle)
+                // One flat list on the site, spoilers marked
+                chips("Tags", tags - spoilerTags.toSet())
+                chips("Spoilers", spoilerTags, spoiler = true)
+            }
+        }
     }
 }
 
