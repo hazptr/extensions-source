@@ -8,6 +8,7 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.AppInfo
 import eu.kanade.tachiyomi.network.HttpException
 import eu.kanade.tachiyomi.source.ConfigurableSource
+import eu.kanade.tachiyomi.source.SyncableSource
 import eu.kanade.tachiyomi.source.UnmeteredSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -16,8 +17,12 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
+import eu.kanade.tachiyomi.source.model.SyncState
 import keiyoushi.annotation.Source
+import keiyoushi.network.DEFAULT_CACHE_CONTROL
 import keiyoushi.network.Fetch
+import keiyoushi.network.call
+import keiyoushi.network.fetch
 import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
@@ -32,6 +37,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import okhttp3.CacheControl
 import okhttp3.Credentials
 import okhttp3.Dns
 import okhttp3.Headers
@@ -40,6 +46,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import org.apache.commons.text.StringSubstitutor
 import java.io.IOException
@@ -51,7 +58,8 @@ class Komga(
     override val id: Long,
 ) : KeiSource(),
     ConfigurableSource,
-    UnmeteredSource {
+    UnmeteredSource,
+    SyncableSource {
 
     private val preferences: SharedPreferences by getPreferencesLazy()
 
@@ -222,25 +230,12 @@ class Komga(
             }
             "readlists" -> coroutineScope {
                 val details = async { if (fetchDetails) client.get(url, Fetch.XHR).parseAs<ReadListDto>().toSManga(storedRoot) else manga }
-                val books = async {
-                    if (fetchChapters) {
-                        val booksUrl = url.newBuilder()
-                            .addPathSegment("books")
-                            .addQueryParameter("unpaged", "true")
-                            .addQueryParameter("media_status", "READY")
-                            .addQueryParameter("deleted", "false")
-                            .build()
-                        client.get(booksUrl, Fetch.XHR).parseAs<PageWrapperDto<BookDto>>().content
-                            .toSChapters(manga, isFromReadList = true)
-                    } else {
-                        chapters
-                    }
-                }
+                val books = async { if (fetchChapters) getReadListBooks(url).toSChapters(manga, isFromReadList = true) else chapters }
                 SMangaUpdate(details.await(), books.await())
             }
             else -> coroutineScope {
                 val details = async { if (fetchDetails) client.get(url, Fetch.XHR).parseAs<SeriesDto>().toSManga(storedRoot) else manga }
-                val books = async { if (fetchChapters) getSeriesChapters(manga) else chapters }
+                val books = async { if (fetchChapters) getSeriesBooks(manga).toSChapters(manga, isFromReadList = false) else chapters }
                 SMangaUpdate(details.await(), books.await())
             }
         }
@@ -274,7 +269,17 @@ class Komga(
             .map { it.toSManga(apiRoot) }
     }
 
-    private suspend fun getSeriesChapters(manga: SManga): List<SChapter> {
+    private suspend fun getReadListBooks(url: HttpUrl, cacheControl: CacheControl = DEFAULT_CACHE_CONTROL): List<BookDto> {
+        val booksUrl = url.newBuilder()
+            .addPathSegment("books")
+            .addQueryParameter("unpaged", "true")
+            .addQueryParameter("media_status", "READY")
+            .addQueryParameter("deleted", "false")
+            .build()
+        return client.get(booksUrl, Fetch.XHR, cacheControl).parseAs<PageWrapperDto<BookDto>>().content
+    }
+
+    private suspend fun getSeriesBooks(manga: SManga): List<BookDto> {
         val seriesId = manga.url.toHttpUrl().pathSegments.last()
         val url = apiUrl("v1/books/list")
             .addQueryParameter("unpaged", "true")
@@ -290,8 +295,44 @@ class Komga(
             ),
         ).toJsonRequestBody()
         return client.post(url, Fetch.XHR, body).parseAs<PageWrapperDto<BookDto>>().content
-            .toSChapters(manga, isFromReadList = false)
     }
+
+    // The read books, as the chapter urls of the entry
+    override suspend fun getSyncState(manga: SManga): SyncState {
+        val url = manga.url.toHttpUrl()
+        val readUrls = when (url.entryType) {
+            "books" -> {
+                val book = client.get(url, Fetch.XHR, CacheControl.FORCE_NETWORK).parseAs<BookDto>()
+                setOfNotNull(manga.url.takeIf { book.isReadable && book.isRead })
+            }
+            else -> {
+                val books = if (url.entryType == "readlists") getReadListBooks(url, CacheControl.FORCE_NETWORK) else getSeriesBooks(manga)
+                val storedRoot = manga.storedApiRoot
+                books.filter { it.isReadable && it.isRead }.mapTo(HashSet()) { "$storedRoot/v1/books/${it.id}" }
+            }
+        }
+        return SyncState(readUrls, favorite = null)
+    }
+
+    // Every chapter is a book. A book that's gone has nothing left to sync
+    override suspend fun setChaptersRead(manga: SManga, chapters: List<SChapter>, read: Boolean) {
+        val failures = chapters.mapNotNull { chapter ->
+            val request = Request.Builder()
+                .url(chapter.url.toHttpUrl().newBuilder().addPathSegment("read-progress").build())
+                .headers(headers)
+                .fetch(Fetch.XHR)
+                .apply { if (read) patch(BookReadProgressDto(completed = true).toJsonRequestBody()) else delete() }
+                .build()
+            runCatching {
+                client.call(request, ensureSuccess = false).use { response ->
+                    if (!response.isSuccessful && response.code != 404) throw HttpException(response.code)
+                }
+            }.exceptionOrNull()
+        }
+        failures.firstOrNull()?.let { throw it }
+    }
+
+    override suspend fun setFavorite(manga: SManga, favorite: Boolean) = throw UnsupportedOperationException("Komga has no favorites")
 
     override fun getMangaUrl(manga: SManga) = manga.url.toWebUrl()
 

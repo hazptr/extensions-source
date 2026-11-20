@@ -100,7 +100,10 @@ class BookDto(
     private val size: String,
     val media: MediaDto,
     val metadata: BookMetadataDto,
+    private val readProgress: BookReadProgressDto? = null,
 ) {
+    val isRead get() = readProgress?.completed == true
+
     fun toSManga(apiRoot: String) = SManga.create().apply {
         title = metadata.title
         url = "$apiRoot/v1/books/$id"
@@ -260,3 +263,6 @@ class OperatorDto<T>(
 
 @Serializable
 class AuthorMatchDto(private val name: String, private val role: String)
+
+@Serializable
+class BookReadProgressDto(val completed: Boolean)
