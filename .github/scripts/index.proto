@@ -3,6 +3,7 @@ syntax = "proto3";
 // Upstream source: https://github.com/mihonapp/tachiyomix/blob/e4d546c/index/index.proto
 //
 // divergence: Resources.jarUrl (field 501)
+// ahead of upstream: Index.iconUrl (field 5), https://github.com/mihonapp/tachiyomix/pull/45
 //
 // Regenerate the Python bindings after editing:
 //   protoc --python_out=. --pyi_out=. index.proto
@@ -12,6 +13,7 @@ message Index {
   string badgeLabel = 2;
   string signingKey = 3;
   Contact contact = 4;
+  optional string iconUrl = 5;
   oneof extensions {
     ExtensionList extensionList = 101;
     string extensionListUrl = 102;

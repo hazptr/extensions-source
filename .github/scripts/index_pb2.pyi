@@ -19,20 +19,22 @@ CONTENT_WARNING_MIXED: ContentWarning
 CONTENT_WARNING_NSFW: ContentWarning
 
 class Index(_message.Message):
-    __slots__ = ("name", "badgeLabel", "signingKey", "contact", "extensionList", "extensionListUrl")
+    __slots__ = ("name", "badgeLabel", "signingKey", "contact", "iconUrl", "extensionList", "extensionListUrl")
     NAME_FIELD_NUMBER: _ClassVar[int]
     BADGELABEL_FIELD_NUMBER: _ClassVar[int]
     SIGNINGKEY_FIELD_NUMBER: _ClassVar[int]
     CONTACT_FIELD_NUMBER: _ClassVar[int]
+    ICONURL_FIELD_NUMBER: _ClassVar[int]
     EXTENSIONLIST_FIELD_NUMBER: _ClassVar[int]
     EXTENSIONLISTURL_FIELD_NUMBER: _ClassVar[int]
     name: str
     badgeLabel: str
     signingKey: str
     contact: Contact
+    iconUrl: str
     extensionList: ExtensionList
     extensionListUrl: str
-    def __init__(self, name: _Optional[str] = ..., badgeLabel: _Optional[str] = ..., signingKey: _Optional[str] = ..., contact: _Optional[_Union[Contact, _Mapping]] = ..., extensionList: _Optional[_Union[ExtensionList, _Mapping]] = ..., extensionListUrl: _Optional[str] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., badgeLabel: _Optional[str] = ..., signingKey: _Optional[str] = ..., contact: _Optional[_Union[Contact, _Mapping]] = ..., iconUrl: _Optional[str] = ..., extensionList: _Optional[_Union[ExtensionList, _Mapping]] = ..., extensionListUrl: _Optional[str] = ...) -> None: ...
 
 class Contact(_message.Message):
     __slots__ = ("website", "discord")
