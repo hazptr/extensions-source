@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Siikomik"
-    versionCode = 62
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

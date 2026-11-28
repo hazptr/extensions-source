@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ToonTop"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     theme = "mangak"
     libVersion = "1.6"

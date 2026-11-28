@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Alphapolis"
-    versionCode = 4
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

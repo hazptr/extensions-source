@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Manga Bab"
     pkgName = "ar.arabhentai"
-    versionCode = 3
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Kmansin09"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "madara"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ZinManga.art"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "zinmangaart"

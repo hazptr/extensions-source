@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Monochrome Custom"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "monochrome"

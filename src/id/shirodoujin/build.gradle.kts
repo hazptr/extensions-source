@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Shiro Doujin"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "zmanga"

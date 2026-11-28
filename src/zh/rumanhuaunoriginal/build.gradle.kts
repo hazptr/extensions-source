@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Rumanhua (unoriginal)"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

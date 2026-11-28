@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Read Attack on Titan Shingeki no Kyojin Manga"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "mangacatalog"

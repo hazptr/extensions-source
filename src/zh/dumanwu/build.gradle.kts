@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Dumanwu"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "mmlook"

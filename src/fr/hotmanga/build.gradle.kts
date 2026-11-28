@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Hot Manga"
     theme = "komiko"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

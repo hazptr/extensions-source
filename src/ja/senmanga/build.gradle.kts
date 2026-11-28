@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Sen Manga"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

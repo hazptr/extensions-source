@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "I Think I Like You"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

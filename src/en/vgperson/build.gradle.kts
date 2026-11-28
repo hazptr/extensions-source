@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "vgperson"
-    versionCode = 9
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

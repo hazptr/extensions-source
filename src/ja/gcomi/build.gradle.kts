@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "G-Comi"
     pkgName = "ja.comicmedu"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "comiciviewer"

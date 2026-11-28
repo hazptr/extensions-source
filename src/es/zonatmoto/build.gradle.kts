@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Zonatmo.to (unoriginal)"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

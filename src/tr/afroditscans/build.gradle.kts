@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Afrodit Scans"
-    versionCode = 31
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "uzaymanga"

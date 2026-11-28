@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Geass Comics"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

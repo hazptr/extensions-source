@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaK"
-    versionCode = 31
     contentWarning = ContentWarning.MIXED
     theme = "mangak"
     libVersion = "1.6"

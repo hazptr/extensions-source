@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Emperor Scan"
     theme = "imperiomanhwa"
-    versionCode = 70
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

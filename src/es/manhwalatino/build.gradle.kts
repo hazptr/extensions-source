@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manhwa-Latino"
-    versionCode = 11
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "madara"

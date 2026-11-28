@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "MangaHot"
     theme = "madara"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

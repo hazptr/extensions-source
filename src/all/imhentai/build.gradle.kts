@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "IMHentai"
-    versionCode = 16
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "galleryadults"

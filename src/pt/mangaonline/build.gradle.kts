@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga Online"
-    versionCode = 59
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

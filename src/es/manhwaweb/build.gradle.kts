@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ManhwaWeb"
-    versionCode = 17
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

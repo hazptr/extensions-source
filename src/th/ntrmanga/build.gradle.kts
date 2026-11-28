@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "NTR-Manga"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "mangathemesia"

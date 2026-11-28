@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "AComics"
-    versionCode = 10
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

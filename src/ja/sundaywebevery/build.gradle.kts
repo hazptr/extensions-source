@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Sunday Web Every"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "gigaviewer"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manta Comics"
-    versionCode = 12
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

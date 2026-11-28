@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Coven Scan"
-    versionCode = 3
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

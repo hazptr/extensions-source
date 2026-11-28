@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "BocchiManga"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

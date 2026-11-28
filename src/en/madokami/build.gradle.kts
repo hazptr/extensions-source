@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Madokami"
-    versionCode = 21
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

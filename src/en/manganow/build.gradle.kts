@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaNow"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "mangareader"

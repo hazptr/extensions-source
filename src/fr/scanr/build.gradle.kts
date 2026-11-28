@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ScanR"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MadaraDex"
-    versionCode = 6
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "madara"

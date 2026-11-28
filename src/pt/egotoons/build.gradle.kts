@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Ego Toons"
-    versionCode = 12
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

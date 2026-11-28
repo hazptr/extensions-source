@@ -9,8 +9,6 @@ import javax.inject.Inject
 abstract class KeiyoushiThemeExtension @Inject constructor(
     private val objects: ObjectFactory,
 ) {
-    @Deprecated("Ignored: CI sets the version from the published repo")
-    abstract val baseVersionCode: Property<Int>
     abstract val libVersion: Property<String>
 
     abstract val deeplinks: ListProperty<ExtensionDeeplink>

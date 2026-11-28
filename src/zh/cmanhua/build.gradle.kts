@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "CManhua"
     pkgName = "en.cmanhua"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

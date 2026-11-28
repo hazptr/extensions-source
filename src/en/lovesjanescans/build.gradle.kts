@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Lovesjane Scans"
     theme = "madara"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

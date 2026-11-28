@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "WNACG"
-    versionCode = 9
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

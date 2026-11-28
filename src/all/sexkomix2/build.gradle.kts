@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "SexKomix2"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

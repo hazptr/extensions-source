@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Kemono Café"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

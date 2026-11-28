@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Goon Scans"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "mangathemesia"

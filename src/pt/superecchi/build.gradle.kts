@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Super Ecchi"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

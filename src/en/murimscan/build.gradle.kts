@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MurimScan"
-    versionCode = 37
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "zeistmanga"

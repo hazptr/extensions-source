@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "SACACHISPA"
-    versionCode = 4
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

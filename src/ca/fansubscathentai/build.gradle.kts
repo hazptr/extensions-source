@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Hentai.cat"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "fansubscat"

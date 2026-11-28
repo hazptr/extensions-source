@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaOwl.io (unoriginal)"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "madara"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "J-N Books"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "comiciviewer"

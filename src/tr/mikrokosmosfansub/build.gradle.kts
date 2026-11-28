@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mikrokosmos Fansub"
-    versionCode = 19
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

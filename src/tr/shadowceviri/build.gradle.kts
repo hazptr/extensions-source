@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Shadow Çeviri"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "zeistmanga"

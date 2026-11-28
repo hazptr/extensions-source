@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Dark Science"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

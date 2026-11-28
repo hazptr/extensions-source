@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Nekopost"
-    versionCode = 19
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

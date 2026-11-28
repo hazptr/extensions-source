@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Uchuujin Projects"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "mangathemesia"

@@ -3,7 +3,6 @@ plugins {
 }
 
 keiyoushi {
-    baseVersionCode = 34
     libVersion = "1.6"
 
     deeplink {

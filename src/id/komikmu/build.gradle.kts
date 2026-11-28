@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Komikmu"
     theme = "mangathemesia"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Paradise Scans"
-    versionCode = 25
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga Xiao Si"
-    versionCode = 3
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

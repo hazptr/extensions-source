@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "1Manga.co"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "mangahub"

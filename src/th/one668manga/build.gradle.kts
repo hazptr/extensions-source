@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "1668Manga"
     theme = "mangathemesia"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

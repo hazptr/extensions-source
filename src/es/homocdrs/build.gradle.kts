@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "HOMOcdrs"
     theme = "zeistmanga"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

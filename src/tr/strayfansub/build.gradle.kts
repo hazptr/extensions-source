@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Stray Fansub"
     theme = "mangathemesia"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

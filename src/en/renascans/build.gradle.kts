@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Renascans"
-    versionCode = 30
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

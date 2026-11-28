@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MLBB Lore"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

@@ -8,7 +8,6 @@ val languages = listOf("ar", "de", "en", "es", "fr", "id", "pt-BR", "ru")
 
 keiyoushi {
     name = "Manga Club"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "mangaverse"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Music Book Japan"
-    versionCode = 5
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

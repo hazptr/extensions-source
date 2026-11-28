@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Webcomics"
-    versionCode = 14
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

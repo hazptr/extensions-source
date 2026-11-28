@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Yona Bar"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

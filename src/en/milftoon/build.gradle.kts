@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Milftoon"
-    versionCode = 60
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

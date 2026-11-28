@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Magus Manga"
-    versionCode = 46
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "iken"

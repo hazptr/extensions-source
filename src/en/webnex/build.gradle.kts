@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Webnex"
-    versionCode = 13
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

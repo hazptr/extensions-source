@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Lelscan-VF"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "fuzzydoodle"

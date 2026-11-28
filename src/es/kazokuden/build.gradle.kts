@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Kazoku Den"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "madara"

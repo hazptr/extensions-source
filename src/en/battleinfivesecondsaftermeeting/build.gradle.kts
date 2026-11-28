@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Battle In 5 Seconds After Meeting"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "madara"

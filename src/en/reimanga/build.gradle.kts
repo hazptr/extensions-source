@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ReiManga"
-    versionCode = 10
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

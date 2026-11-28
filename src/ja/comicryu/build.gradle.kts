@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Comic Ryu"
-    versionCode = 2
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "comiciviewer"

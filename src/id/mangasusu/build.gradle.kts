@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mangasusu"
-    versionCode = 5
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "mangathemesia"

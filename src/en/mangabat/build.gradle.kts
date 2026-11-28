@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mangabat"
-    versionCode = 8
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "mangabox"

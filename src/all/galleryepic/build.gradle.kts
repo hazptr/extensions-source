@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Gallery Epic"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mangahub"
-    versionCode = 26
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

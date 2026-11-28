@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MR Tenzus"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW // or MIXED, please confirm
     libVersion = "1.6"
     theme = "madara"

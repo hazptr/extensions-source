@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaToon (Limited)"
-    versionCode = 4
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

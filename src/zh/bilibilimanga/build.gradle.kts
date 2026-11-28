@@ -13,7 +13,6 @@ dependencies {
 
 keiyoushi {
     name = "BILIBILI MANGA"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

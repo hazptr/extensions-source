@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "6Manhua"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "mccms"

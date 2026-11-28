@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "LectorXD"
-    versionCode = 6
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

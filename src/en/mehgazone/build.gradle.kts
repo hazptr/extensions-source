@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mehgazone"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

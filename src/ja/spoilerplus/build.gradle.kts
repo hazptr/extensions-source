@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "SpoilerPlus"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

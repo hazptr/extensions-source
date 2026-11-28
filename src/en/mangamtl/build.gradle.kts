@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga MTL"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "manhuarm"

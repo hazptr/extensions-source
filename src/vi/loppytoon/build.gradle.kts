@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "LoppyToon"
-    versionCode = 8
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

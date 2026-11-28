@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "LGBToon"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

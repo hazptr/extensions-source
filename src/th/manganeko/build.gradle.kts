@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Manga-Neko"
     theme = "mangathemesia"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "The Girl from Random Chatting Manga Online"
-    versionCode = 3
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

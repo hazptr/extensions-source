@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Only Yaoi Scan Trad"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "oyst"

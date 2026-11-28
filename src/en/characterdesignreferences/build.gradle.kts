@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Character Design References"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

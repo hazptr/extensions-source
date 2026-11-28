@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "18 Porn Comic"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "manga18"

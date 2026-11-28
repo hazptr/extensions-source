@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Rùa Hấp Chanh Dây"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

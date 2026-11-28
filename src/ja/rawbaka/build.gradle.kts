@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "RawBaka"
-    versionCode = 58
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Fansubs.cat"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "fansubscat"

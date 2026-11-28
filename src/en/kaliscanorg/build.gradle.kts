@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "KaliScan.org (unoriginal)"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

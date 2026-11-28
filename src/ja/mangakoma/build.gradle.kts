@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga Koma"
-    versionCode = 4
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "liliana"

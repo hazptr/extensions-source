@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ManhwaLand.mom"
-    versionCode = 12
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "manhwaindo"

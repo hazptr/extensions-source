@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Dm5"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "dm5"

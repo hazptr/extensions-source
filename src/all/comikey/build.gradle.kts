@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Comikey"
-    versionCode = 15
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

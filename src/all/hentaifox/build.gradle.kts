@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "HentaiFox"
-    versionCode = 10
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "galleryadults"

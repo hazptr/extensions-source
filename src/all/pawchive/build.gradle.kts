@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Pawchive"
-    versionCode = 3
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "kemono"

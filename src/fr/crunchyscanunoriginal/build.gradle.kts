@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "CrunchyScan (unoriginal)"
     pkgName = "fr.crunchyscan"
-    versionCode = 2
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "crunchyscanst"

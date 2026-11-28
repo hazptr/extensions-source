@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Yuri-Online"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "madara"

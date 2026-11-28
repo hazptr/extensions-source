@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Fleur Blanche"
-    versionCode = 7
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

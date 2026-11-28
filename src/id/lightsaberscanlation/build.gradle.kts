@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Lightsaber Scanlation"
     theme = "zeistmanga"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

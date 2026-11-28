@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "LectorJPG"
-    versionCode = 51
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

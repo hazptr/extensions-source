@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Ailura Scans"
     theme = "duckscans"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

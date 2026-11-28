@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Ngomik (unoriginal)"
-    versionCode = 6
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "mangathemesia"

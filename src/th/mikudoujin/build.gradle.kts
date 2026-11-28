@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MikuDoujin"
-    versionCode = 9
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

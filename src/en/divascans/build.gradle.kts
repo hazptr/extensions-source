@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Diva Scans"
-    versionCode = 25
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "vinetheme"

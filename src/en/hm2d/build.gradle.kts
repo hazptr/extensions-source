@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "HM2D"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

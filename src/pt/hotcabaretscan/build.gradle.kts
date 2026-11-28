@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Hot Cabaret Scan"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "madara"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Gaugau Monster Plus"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

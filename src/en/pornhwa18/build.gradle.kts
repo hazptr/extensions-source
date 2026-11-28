@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Pornhwa18"
     pkgName = "id.pornhwa18"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

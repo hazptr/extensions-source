@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "LumosKomik"
-    versionCode = 56
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "hwalumi"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "NewXToon"
-    versionCode = 4
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

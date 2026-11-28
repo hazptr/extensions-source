@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Comizy"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     theme = "mangak"
     libVersion = "1.6"

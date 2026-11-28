@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Kitsune Dawn"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "keyoapp"

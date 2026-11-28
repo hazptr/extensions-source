@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Ecchi-Doujin"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "mangathemesia"

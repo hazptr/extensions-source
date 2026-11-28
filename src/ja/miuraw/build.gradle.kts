@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "RawNaver"
-    versionCode = 5
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     pkgName = "ja.rawxz"

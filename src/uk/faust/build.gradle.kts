@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Faust"
-    versionCode = 6
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

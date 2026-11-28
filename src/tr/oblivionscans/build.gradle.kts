@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Oblivion Scans"
     theme = "duckscans"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

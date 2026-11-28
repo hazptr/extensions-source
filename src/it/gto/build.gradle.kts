@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "GTO The Great Site"
-    versionCode = 3
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "pizzareader"

@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Omoi"
     pkgName = "en.azuki"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

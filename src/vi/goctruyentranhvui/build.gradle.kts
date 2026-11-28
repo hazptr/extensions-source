@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Goc Truyen Tranh Vui"
-    versionCode = 20
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

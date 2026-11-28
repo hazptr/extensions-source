@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manganato"
-    versionCode = 7
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "mangabox"

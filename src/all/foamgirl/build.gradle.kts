@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "FoamGirl"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

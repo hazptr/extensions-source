@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga18Me"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "yiimadara"

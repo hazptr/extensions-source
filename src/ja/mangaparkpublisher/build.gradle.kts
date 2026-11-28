@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga-Park"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

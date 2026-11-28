@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "DocTruyen3Q"
-    versionCode = 33
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "wpcomics"

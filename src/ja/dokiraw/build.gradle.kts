@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Dokiraw"
-    versionCode = 20
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

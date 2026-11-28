@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Manga Eclipse"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

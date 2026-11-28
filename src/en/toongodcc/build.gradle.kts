@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ToonGod (Unoriginal)"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "yiimanga"

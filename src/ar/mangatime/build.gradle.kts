@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaTime"
-    versionCode = 2
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

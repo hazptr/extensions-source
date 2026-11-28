@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Fairies vs Tentacles"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

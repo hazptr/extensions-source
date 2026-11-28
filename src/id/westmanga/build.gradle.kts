@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "West Manga"
-    versionCode = 6
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

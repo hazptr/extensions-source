@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Violet Scans"
     pkgName = "en.shojoscans"
-    versionCode = 6
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "mangathemesia"

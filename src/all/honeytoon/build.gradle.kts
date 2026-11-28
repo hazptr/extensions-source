@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Honeytoon"
-    versionCode = 2
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

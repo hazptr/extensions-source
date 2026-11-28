@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Univers Otaku (unoriginal)"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "crunchyscanst"

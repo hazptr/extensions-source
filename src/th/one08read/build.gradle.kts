@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "108Read"
     theme = "mangathemesia"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

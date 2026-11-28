@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ManhuaPlus (Unoriginal)"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "liliana"

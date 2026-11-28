@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Niji Translations"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

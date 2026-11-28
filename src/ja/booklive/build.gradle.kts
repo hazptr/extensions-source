@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "BookLive"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

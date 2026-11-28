@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Baka Manhua"
-    versionCode = 14
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

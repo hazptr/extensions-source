@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Sunset Manga"
-    versionCode = 57
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

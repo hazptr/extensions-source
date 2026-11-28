@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Kewn Scans"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "keyoapp"

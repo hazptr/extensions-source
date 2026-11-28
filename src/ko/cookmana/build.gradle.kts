@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Cookmana"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

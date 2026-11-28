@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mangas Origines (unoriginal)"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "crunchyscanst"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mushinook"
-    versionCode = 36
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "loneseal"

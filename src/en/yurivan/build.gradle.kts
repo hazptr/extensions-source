@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Yurivan"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

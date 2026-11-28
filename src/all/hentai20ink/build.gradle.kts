@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Hentai20.ink (unoriginal)"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

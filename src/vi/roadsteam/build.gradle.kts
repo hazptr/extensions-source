@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Roads Team"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

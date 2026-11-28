@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mantraz Scan"
-    versionCode = 60
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

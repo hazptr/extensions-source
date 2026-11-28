@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Internet Archive"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

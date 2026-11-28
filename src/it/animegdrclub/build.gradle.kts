@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Anime GDR Club"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

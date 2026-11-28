@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Hanami Heaven"
-    versionCode = 6
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

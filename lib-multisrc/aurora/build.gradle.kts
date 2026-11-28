@@ -3,6 +3,5 @@ plugins {
 }
 
 keiyoushi {
-    baseVersionCode = 7
     libVersion = "1.6"
 }

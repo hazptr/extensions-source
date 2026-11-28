@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "The Property of Hate"
-    versionCode = 7
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaForFree.net"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

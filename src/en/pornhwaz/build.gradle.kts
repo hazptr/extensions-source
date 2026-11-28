@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Pornhwaz"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "LuvEvaLand"
-    versionCode = 5
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

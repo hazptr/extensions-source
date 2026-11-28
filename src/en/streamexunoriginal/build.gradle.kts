@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "StreameX (unoriginal)"
-    versionCode = 3
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

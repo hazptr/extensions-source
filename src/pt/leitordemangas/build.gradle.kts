@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Leitor de Mangas"
-    versionCode = 52
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "aurora"

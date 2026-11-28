@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Siyah Melek"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "initmanga"

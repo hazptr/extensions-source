@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "XOXO Comics"
-    versionCode = 6
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "wpcomics"

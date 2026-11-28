@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "TuttoAnimeManga"
-    versionCode = 5
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "pizzareader"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Rncalation"
-    versionCode = 2
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

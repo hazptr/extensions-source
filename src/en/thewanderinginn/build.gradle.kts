@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "The Wandering Inn"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

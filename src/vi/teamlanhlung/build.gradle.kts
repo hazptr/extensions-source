@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Team Lanh Lung"
-    versionCode = 44
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "koi"

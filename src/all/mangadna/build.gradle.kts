@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaDNA"
-    versionCode = 0
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "yiimadara"

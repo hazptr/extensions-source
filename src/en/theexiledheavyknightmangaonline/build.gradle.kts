@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Read The Exiled Heavy Knight Manga Online"
-    versionCode = 3
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "solomanga"

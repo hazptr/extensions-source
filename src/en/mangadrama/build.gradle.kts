@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga Drama"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "initmanga"

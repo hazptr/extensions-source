@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Buon Dua"
-    versionCode = 13
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

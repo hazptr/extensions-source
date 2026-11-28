@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "YakshaComics"
-    versionCode = 3
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "madara"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Genz Toons"
-    versionCode = 33
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "keyoapp"

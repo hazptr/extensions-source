@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MANGA-D"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

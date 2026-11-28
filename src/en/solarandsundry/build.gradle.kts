@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Solar and Sundry"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

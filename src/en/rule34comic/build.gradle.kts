@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Rule34Comic"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

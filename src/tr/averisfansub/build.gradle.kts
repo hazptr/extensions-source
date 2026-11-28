@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Averis Fansub"
     theme = "madara"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Bara Manga Online"
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

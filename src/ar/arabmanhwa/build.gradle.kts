@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "ArabManhwa"
-    versionCode = 58
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

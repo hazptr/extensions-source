@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Astral Scans"
-    versionCode = 11
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "mangathemesia"

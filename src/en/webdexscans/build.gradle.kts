@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Webdex Scans"
-    versionCode = 57
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

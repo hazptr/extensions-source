@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "AllHentai"
-    versionCode = 27
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "grouple"

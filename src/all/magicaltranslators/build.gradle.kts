@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Magical Translators"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "guya"

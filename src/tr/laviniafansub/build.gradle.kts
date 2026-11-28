@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Lavinia Fansub"
-    versionCode = 7
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Komik AV"
-    versionCode = 8
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

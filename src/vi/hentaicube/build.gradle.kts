@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "CBHentai"
-    versionCode = 42
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

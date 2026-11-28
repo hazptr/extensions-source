@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MikoRoku"
-    versionCode = 23
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

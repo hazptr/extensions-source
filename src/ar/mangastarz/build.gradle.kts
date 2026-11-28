@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Manga Starz"
-    versionCode = 11
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "madara"

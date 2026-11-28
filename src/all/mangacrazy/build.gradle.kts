@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "MangaCrazy"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
     theme = "madara"

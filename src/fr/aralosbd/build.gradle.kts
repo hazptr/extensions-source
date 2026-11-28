@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "AralosBD"
-    versionCode = 2
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

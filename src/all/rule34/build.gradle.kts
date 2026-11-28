@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Rule34"
-    versionCode = 0
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

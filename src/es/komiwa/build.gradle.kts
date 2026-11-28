@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Komiwa"
-    versionCode = 7
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 

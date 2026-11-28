@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Mangatellers"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
     theme = "foolslide"

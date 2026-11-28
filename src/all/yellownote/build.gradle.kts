@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "YellowNote"
-    versionCode = 2
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6"
 

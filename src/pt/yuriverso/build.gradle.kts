@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Yuri on Air"
-    versionCode = 6
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "madara"

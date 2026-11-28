@@ -7,7 +7,6 @@ plugins {
 keiyoushi {
     name = "Zenith Scans"
     theme = "mangathemesia"
-    versionCode = 0
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 

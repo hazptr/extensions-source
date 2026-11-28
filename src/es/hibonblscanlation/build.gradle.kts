@@ -6,7 +6,6 @@ plugins {
 
 keiyoushi {
     name = "Hibon BL Scanlation"
-    versionCode = 1
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
     theme = "zeistmanga"
