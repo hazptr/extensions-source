@@ -16,7 +16,7 @@ const val CHAPTER_VOTES_MEMO = "votes"
 const val CHAPTER_OFFICIAL_MEMO = "official"
 const val CHAPTER_GROUP_ID_MEMO = "groupId"
 const val CHAPTER_LIST_DEDUPLICATED_MEMO = "chapterListDeduplicated"
-const val CHAPTER_LIST_BLACKLIST_MEMO = "chapterListBlacklist"
+const val CHAPTER_LIST_BLOCKED_GROUPS_MEMO = "chapterListBlacklist"
 const val CHAPTER_DATA_VERSION_MEMO = "chapterDataVersion"
 
 @Serializable
@@ -62,53 +62,39 @@ class Manga(
         private val medium: String? = null,
         private val large: String? = null,
     ) {
-        fun from(baseUrl: HttpUrl, quality: String?) = when (quality) {
-            "large" -> large ?: medium
-            else -> medium ?: large
-        }?.let { baseUrl.resolve(it)?.toString() }
+        fun from(baseUrl: HttpUrl) = (large ?: medium)?.let { baseUrl.resolve(it)?.toString() }
     }
 
-    fun toSManga(
-        baseUrl: HttpUrl,
-        posterQuality: String?,
-        altTitlesInDesc: Boolean = false,
-        scorePosition: String,
-        showExtraInfo: Boolean = true,
-        showTags: Boolean = false,
-    ) = SManga.create().apply {
+    fun toSManga(baseUrl: HttpUrl) = SManga.create().apply {
         url = this@Manga.url.substringAfter("/title")
         title = this@Manga.title
 
         author = authors?.joinToString { it.title }
         artist = artists?.joinToString { it.title }
         description = MarkdownDescription.Builder().apply {
-            val score = ratedAvg.takeIf { it > 0 }
-            if (scorePosition == "top") rating(score)
+            rating(ratedAvg.takeIf { it > 0 })
             markdown(synopsis)
-            if (altTitlesInDesc) altTitles(altTitles)
-            if (showExtraInfo) {
-                field("Year", year?.takeIf { it > 0 }?.toString())
-                field("Language", originalLanguage?.uppercase())
-                field("Publisher", publishers?.joinToString { it.title }?.ifEmpty { null })
-                field("Content rating", contentRating.replaceFirstChar(Char::uppercase))
-                field("Rank", rank.takeIf { it > 0 }?.let { "#$it" })
-                field("Rated by", ratedCount.takeIf { it > 0 }?.toString())
-                field("Followed by", followsTotal.takeIf { it > 0 }?.toString())
-                links(getTrackerLinks(), label = "Trackers")
-            }
-            if (scorePosition == "bottom") rating(score)
+            altTitles(altTitles)
+            field("Year", year?.takeIf { it > 0 }?.toString())
+            field("Language", originalLanguage?.uppercase())
+            field("Publisher", publishers?.joinToString { it.title }?.ifEmpty { null })
+            field("Content rating", contentRating.replaceFirstChar(Char::uppercase))
+            field("Rank", rank.takeIf { it > 0 }?.let { "#$it" })
+            field("Rated by", ratedCount.takeIf { it > 0 }?.toString())
+            field("Followed by", followsTotal.takeIf { it > 0 }?.toString())
+            links(getTrackerLinks(), label = "Trackers")
         }.build()
         initialized = true
         status = parseStatus()
-        thumbnail_url = this@Manga.poster?.from(baseUrl, posterQuality)
-        genre = getGenres(showTags)
+        thumbnail_url = this@Manga.poster?.from(baseUrl)
+        genre = getGenres()
     }
 
-    fun toBasicSManga(baseUrl: HttpUrl, posterQuality: String?) = SManga.create().apply {
+    fun toBasicSManga(baseUrl: HttpUrl) = SManga.create().apply {
         url = this@Manga.url.substringAfter("/title")
         title = this@Manga.title
         status = parseStatus()
-        thumbnail_url = this@Manga.poster?.from(baseUrl, posterQuality)
+        thumbnail_url = this@Manga.poster?.from(baseUrl)
     }
 
     private fun parseStatus() = when (status) {
@@ -134,7 +120,7 @@ class Manga(
         return known + unknown
     }
 
-    private fun getGenres(showTags: Boolean) = buildList {
+    private fun getGenres() = buildList {
         when (type) {
             "manhwa" -> add("Manhwa")
             "manhua" -> add("Manhua")
@@ -144,7 +130,7 @@ class Manga(
         formats?.map { it.title }?.let { addAll(it) }
         genres?.map { it.title }?.let { addAll(it) }
         demographics?.map { it.title }?.let { addAll(it) }
-        if (showTags) tags?.map { it.title }?.let { addAll(it) }
+        tags?.map { it.title }?.let { addAll(it) }
         if (contentRating == "erotica" || contentRating == "pornographic") add("NSFW")
     }.distinct().joinToString()
 }

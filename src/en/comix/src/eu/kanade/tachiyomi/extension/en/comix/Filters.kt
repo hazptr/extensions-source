@@ -7,8 +7,6 @@ import java.util.Calendar
 
 class Filters(
     private val contentRating: String,
-    private val selectedTypes: Set<String>,
-    private val selectedDemographics: Set<String>,
     private val blockedGenres: Set<String>,
 ) {
     interface UriFilter {
@@ -99,14 +97,14 @@ class Filters(
             "Web Comic" to "93171",
         )
 
-        fun getDemographics() = arrayOf(
+        private fun getDemographics() = arrayOf(
             "Josei" to "3",
             "Seinen" to "4",
             "Shoujo" to "1",
             "Shounen" to "2",
         )
 
-        fun getTypes() = arrayOf(
+        private fun getTypes() = arrayOf(
             "Manga" to "manga",
             "Manhwa" to "manhwa",
             "Manhua" to "manhua",
@@ -124,7 +122,7 @@ class Filters(
     fun getFilterList() = FilterList(
         SortFilter(getSortables()),
         ContentRatingFilter(contentRating),
-        TypeFilter(selectedTypes),
+        TypeFilter(),
         Filter.Separator(),
         Filter.Header("Tags — comma separated, -Tag to exclude"),
         TagsFilter(),
@@ -133,7 +131,7 @@ class Filters(
         GenreFilter(getGenres(), blockedGenres),
         FormatFilter(getFormats()),
         Filter.Separator(),
-        DemographicFilter(getDemographics(), selectedDemographics),
+        DemographicFilter(getDemographics()),
         StatusFilter(),
         ChapterLengthFilter("Minimum Chapter Length", "min_chap"),
         ChapterLengthFilter("Maximum Chapter Length", "max_chap"),
@@ -192,18 +190,9 @@ class Filters(
 
     private open class UriTriSelectOption(name: String, val value: String) : Filter.TriState(name)
 
-    private class DemographicFilter(
-        demographics: Array<Pair<String, String>>,
-        selectedValues: Set<String>,
-    ) : Filter.Group<UriTriSelectOption>(
-        "Demographic",
-        demographics.map { (name, value) ->
-            UriTriSelectOption(name, value).apply {
-                if (value !in selectedValues) state = TriState.STATE_EXCLUDE
-            }
-        },
-    ),
-        PreferenceFilter {
+    private class DemographicFilter(demographics: Array<Pair<String, String>>) :
+        Filter.Group<UriTriSelectOption>("Demographic", demographics.map { (name, value) -> UriTriSelectOption(name, value) }),
+        UriFilter {
         override fun addToUri(builder: HttpUrl.Builder) {
             state.filter { it.state == TriState.STATE_INCLUDE }
                 .forEach { builder.addQueryParameter("demographics[]", it.value) }
@@ -212,15 +201,14 @@ class Filters(
         }
     }
 
-    private class TypeFilter(selectedValues: Set<String>) :
+    private class TypeFilter :
         UriMultiSelectFilter(
             "Type",
             "types[]",
             getTypes(),
-            selectedValues,
+            getTypes().map { it.second }.toSet(),
             true,
-        ),
-        PreferenceFilter
+        )
 
     private abstract class TermGroupFilter(
         title: String,

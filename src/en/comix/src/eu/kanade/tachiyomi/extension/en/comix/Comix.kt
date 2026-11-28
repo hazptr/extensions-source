@@ -57,10 +57,7 @@ abstract class Comix :
     ConfigurableSource {
 
     private val preferences: SharedPreferences by getPreferencesLazy {
-        edit().apply {
-            remove(LEGACY_SOLVE_CAPTCHA_PREF)
-            if (getString(PREF_POSTER_QUALITY, null) == "small") putString(PREF_POSTER_QUALITY, "medium")
-        }.apply()
+        edit().apply { REMOVED_PREFS.forEach(::remove) }.apply()
     }
 
     private val tagIdCache = object : LinkedHashMap<String, List<String>>(
@@ -217,7 +214,7 @@ abstract class Comix :
         val requestUrl = url.newBuilder().addQueryParameter("limit", BROWSE_PAGE_LIMIT.toString()).build()
         val result = readApi<ApiResponse<MangaItems>>(requestUrl, "/browse").result
         val mangaList = result.items.map {
-            it.toBasicSManga(baseUrl.toHttpUrl(), preferences.posterQuality())
+            it.toBasicSManga(baseUrl.toHttpUrl())
         }
         return MangasPage(mangaList, result.meta.page < result.meta.lastPage)
     }
@@ -270,8 +267,6 @@ abstract class Comix :
 
     private fun sourceFilters() = Filters(
         contentRating = preferences.contentRating(),
-        selectedTypes = preferences.defaultTypes(),
-        selectedDemographics = preferences.defaultDemographics(),
         blockedGenres = preferences.blockedGenres(),
     )
 
@@ -314,12 +309,11 @@ abstract class Comix :
 
     private suspend fun updateChapters(manga: SManga, chapters: List<SChapter>): List<SChapter> {
         val deduplicateChapters = preferences.deduplicateChapters()
-        val scanlatorBlacklist = preferences.scanlatorBlacklist()
-        val blacklistSignature = scanlatorBlacklist.sorted().joinToString(",")
+        val blockedGroups = preferences.blockedGroups()
+        val blockedGroupsSignature = blockedGroups.sorted().joinToString(",")
         val listMemo = chapters.firstOrNull()?.memo?.takeIf { CHAPTER_LIST_DEDUPLICATED_MEMO in it } ?: manga.memo
-        val fetchUntilKnown = preferences.fetchChaptersUntilKnown() &&
-            listMemo[CHAPTER_LIST_DEDUPLICATED_MEMO]?.booleanOrNull == deduplicateChapters &&
-            listMemo[CHAPTER_LIST_BLACKLIST_MEMO]?.string == blacklistSignature &&
+        val fetchUntilKnown = listMemo[CHAPTER_LIST_DEDUPLICATED_MEMO]?.booleanOrNull == deduplicateChapters &&
+            listMemo[CHAPTER_LIST_BLOCKED_GROUPS_MEMO]?.string == blockedGroupsSignature &&
             listMemo[CHAPTER_DATA_VERSION_MEMO]?.int == CHAPTER_DATA_VERSION
         val knownIds = if (fetchUntilKnown) chapters.mapNotNull { it.chapterId() }.toSet() else emptySet()
 
@@ -330,12 +324,12 @@ abstract class Comix :
             chapter.chapterId()?.let(knownDates::get)?.let { chapter.date_upload = it }
         }
         val candidates = if (fetchUntilKnown) fetched + chapters else fetched
-        return selectChapters(candidates, deduplicateChapters, scanlatorBlacklist).also { selected ->
+        return selectChapters(candidates, deduplicateChapters, blockedGroups).also { selected ->
             selected.firstOrNull()?.apply {
                 memo = buildJsonObject {
                     memo.forEach { (key, value) -> put(key, value) }
                     put(CHAPTER_LIST_DEDUPLICATED_MEMO, deduplicateChapters)
-                    put(CHAPTER_LIST_BLACKLIST_MEMO, blacklistSignature)
+                    put(CHAPTER_LIST_BLOCKED_GROUPS_MEMO, blockedGroupsSignature)
                     put(CHAPTER_DATA_VERSION_MEMO, CHAPTER_DATA_VERSION)
                 }
             }
@@ -344,14 +338,7 @@ abstract class Comix :
 
     private suspend fun getMangaDetail(manga: SManga): Manga = readApi<ApiResponse<Manga>>(mangaApi(manga).build(), getMangaUrl(manga)).result
 
-    private fun parseMangaDetails(detail: Manga): SManga = detail.toSManga(
-        baseUrl.toHttpUrl(),
-        preferences.posterQuality(),
-        preferences.alternativeNamesInDescription(),
-        preferences.scorePosition(),
-        preferences.showExtraInfo(),
-        preferences.showTagsInGenres(),
-    )
+    private fun parseMangaDetails(detail: Manga): SManga = detail.toSManga(baseUrl.toHttpUrl())
 
     override fun getMangaUrl(manga: SManga): String = "$baseUrl/title${manga.url}"
 
@@ -360,7 +347,7 @@ abstract class Comix :
     override suspend fun fetchRelatedMangaList(manga: SManga): List<SManga> {
         val url = mangaApi(manga).addPathSegment("recommended").build()
         return readApi<ApiResponse<MangaItems>>(url, getMangaUrl(manga)).result.items.map {
-            it.toBasicSManga(baseUrl.toHttpUrl(), preferences.posterQuality())
+            it.toBasicSManga(baseUrl.toHttpUrl())
         }
     }
 
@@ -408,15 +395,15 @@ abstract class Comix :
     private fun selectChapters(
         allChapters: List<SChapter>,
         shouldDeduplicate: Boolean,
-        scanlatorBlacklist: Set<String>,
+        blockedGroups: Set<String>,
     ): List<SChapter> {
         val uniqueChapters = allChapters.distinctBy(SChapter::url)
-        val filteredChapters = if (scanlatorBlacklist.isEmpty()) {
+        val filteredChapters = if (blockedGroups.isEmpty()) {
             uniqueChapters
         } else {
             uniqueChapters.filter { chapter ->
-                chapter.scanlator.orEmpty().trim().lowercase() !in scanlatorBlacklist &&
-                    chapter.groupId()?.toString() !in scanlatorBlacklist
+                chapter.scanlator.orEmpty().trim().lowercase() !in blockedGroups &&
+                    chapter.groupId()?.toString() !in blockedGroups
             }
         }
 
@@ -492,24 +479,6 @@ abstract class Comix :
     override fun getFilterList(data: JsonElement?) = sourceFilters().getFilterList()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_FETCH_CHAPTERS_UNTIL_KNOWN
-            title = "Faster chapter list fetching"
-            summary = "Enabled: Uses fewer requests, but may miss newly added older chapters " +
-                "(e.g. chapter 5.5 when the latest known chapter is 150).\n\n" +
-                "Disabled: Finds older chapter additions, but fetching large chapter lists is slower."
-            setDefaultValue(true)
-        }.let(screen::addPreference)
-
-        ListPreference(screen.context).apply {
-            key = PREF_POSTER_QUALITY
-            title = "Thumbnail Quality"
-            summary = "Change the quality of the thumbnail. Current: %s."
-            entryValues = arrayOf("medium", "large")
-            entries = arrayOf("Medium", "Large")
-            setDefaultValue("large")
-        }.let(screen::addPreference)
-
         ListPreference(screen.context).apply {
             key = PREF_CONTENT_RATING
             title = "Content rating"
@@ -519,26 +488,6 @@ abstract class Comix :
             entries = arrayOf("Show all", "Safe only", "Up to Suggestive", "Up to Erotica", "Up to Pornographic")
             entryValues = arrayOf("", "safe", "suggestive", "erotica", "pornographic")
             setDefaultValue(DEFAULT_CONTENT_RATING)
-        }.let(screen::addPreference)
-
-        MultiSelectListPreference(screen.context).apply {
-            key = PREF_DEFAULT_TYPES
-            title = "Default types"
-            summary = "Types to include in popular, latest, and search results. " +
-                "The Type filter in search overrides this."
-            entries = Filters.getTypes().map { it.first }.toTypedArray()
-            entryValues = Filters.getTypes().map { it.second }.toTypedArray()
-            setDefaultValue(Filters.getTypes().map { it.second }.toSet())
-        }.let(screen::addPreference)
-
-        MultiSelectListPreference(screen.context).apply {
-            key = PREF_DEFAULT_DEMOGRAPHICS
-            title = "Default demographics"
-            summary = "Unticked demographics are hidden from popular, latest, and search " +
-                "results. The Demographic filter in search overrides this."
-            entries = Filters.getDemographics().map { it.first }.toTypedArray()
-            entryValues = Filters.getDemographics().map { it.second }.toTypedArray()
-            setDefaultValue(Filters.getDemographics().map { it.second }.toSet())
         }.let(screen::addPreference)
 
         MultiSelectListPreference(screen.context).apply {
@@ -560,73 +509,21 @@ abstract class Comix :
         }.let(screen::addPreference)
 
         EditTextPreference(screen.context).apply {
-            key = PREF_SCANLATOR_BLACKLIST
-            title = "Scanlator Blacklist"
-            summary = "Filter out chapters from specific groups. Comma-separated list of group names or group IDs (e.g., 'Violet Scans, 307')."
-            dialogTitle = "Exclude groups"
+            key = PREF_BLOCKED_GROUPS
+            title = "Blocked groups"
+            summary = "Hide chapters from these groups. Comma-separated group names or group IDs (e.g., 'Violet Scans, 307')."
+            dialogTitle = "Blocked groups"
             setDefaultValue("")
-        }.let(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context).apply {
-            key = ALTERNATIVE_NAMES_IN_DESCRIPTION
-            title = "Show Alternative Names in Description"
-            setDefaultValue(false)
-        }.let(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_SHOW_EXTRA_INFO
-            title = "Show extra info in description"
-            summary = "Append publication year, language, content rating, publisher, rank, " +
-                "ratings count, follower count, and tracker links to the manga description."
-            setDefaultValue(true)
-        }.let(screen::addPreference)
-
-        SwitchPreferenceCompat(screen.context).apply {
-            key = PREF_SHOW_TAGS_IN_GENRES
-            title = "Show tags in genre chips"
-            summary = "Add the site's tags (e.g. Demons, Vampires, Time Travel) to the genres in the manga details."
-            setDefaultValue(false)
-        }.let(screen::addPreference)
-
-        ListPreference(screen.context).apply {
-            key = PREF_SCORE_POSITION
-            title = "Score display position"
-            summary = "%s"
-            entries = arrayOf("Top of description", "Bottom of description", "Don't show")
-            entryValues = arrayOf("top", "bottom", "none")
-            setDefaultValue("top")
         }.let(screen::addPreference)
     }
 
-    private fun SharedPreferences.posterQuality() = getString(PREF_POSTER_QUALITY, "large")
-
     private fun SharedPreferences.deduplicateChapters() = getBoolean(DEDUPLICATE_CHAPTERS, false)
 
-    private fun SharedPreferences.fetchChaptersUntilKnown() = getBoolean(PREF_FETCH_CHAPTERS_UNTIL_KNOWN, true)
-
-    private fun SharedPreferences.scanlatorBlacklist(): Set<String> = getString(PREF_SCANLATOR_BLACKLIST, "")
+    private fun SharedPreferences.blockedGroups(): Set<String> = getString(PREF_BLOCKED_GROUPS, "")
         ?.split(",")
         ?.map { it.trim().lowercase() }
         ?.filter { it.isNotEmpty() }
         ?.toSet() ?: emptySet()
-
-    private fun SharedPreferences.alternativeNamesInDescription() = getBoolean(ALTERNATIVE_NAMES_IN_DESCRIPTION, false)
-
-    private fun SharedPreferences.scorePosition() = getString(PREF_SCORE_POSITION, "top") ?: "top"
-
-    private fun SharedPreferences.showExtraInfo() = getBoolean(PREF_SHOW_EXTRA_INFO, true)
-
-    private fun SharedPreferences.showTagsInGenres() = getBoolean(PREF_SHOW_TAGS_IN_GENRES, false)
-
-    private fun SharedPreferences.defaultTypes(): Set<String> {
-        val all = Filters.getTypes().map { it.second }.toSet()
-        return getStringSet(PREF_DEFAULT_TYPES, all) ?: all
-    }
-
-    private fun SharedPreferences.defaultDemographics(): Set<String> {
-        val all = Filters.getDemographics().map { it.second }.toSet()
-        return getStringSet(PREF_DEFAULT_DEMOGRAPHICS, all)?.ifEmpty { all } ?: all
-    }
 
     private fun SharedPreferences.blockedGenres(): Set<String> = getStringSet(PREF_BLOCKED_GENRES, emptySet()) ?: emptySet()
 
@@ -641,20 +538,22 @@ abstract class Comix :
     }
 
     companion object {
-        private const val PREF_POSTER_QUALITY = "pref_poster_quality"
-        private const val LEGACY_SOLVE_CAPTCHA_PREF = "pref_solve_captcha"
         private const val PREF_CONTENT_RATING = "pref_content_rating"
-        private const val PREF_DEFAULT_TYPES = "pref_default_types"
-        private const val PREF_DEFAULT_DEMOGRAPHICS = "pref_default_demographics"
         private const val PREF_BLOCKED_GENRES = "pref_blocked_genres"
         private const val LEGACY_HIDE_NSFW_PREF = "nsfw_pref"
         private const val DEDUPLICATE_CHAPTERS = "pref_deduplicate_chapters"
-        private const val PREF_FETCH_CHAPTERS_UNTIL_KNOWN = "pref_fetch_chapters_until_known"
-        private const val PREF_SCANLATOR_BLACKLIST = "pref_scanlator_blacklist"
-        private const val ALTERNATIVE_NAMES_IN_DESCRIPTION = "pref_alt_names_in_description"
-        private const val PREF_SHOW_EXTRA_INFO = "pref_show_extra_info"
-        private const val PREF_SHOW_TAGS_IN_GENRES = "pref_show_tags_in_genres"
-        private const val PREF_SCORE_POSITION = "pref_score_position"
+        private const val PREF_BLOCKED_GROUPS = "pref_scanlator_blacklist"
+        private val REMOVED_PREFS = listOf(
+            "pref_solve_captcha",
+            "pref_poster_quality",
+            "pref_default_types",
+            "pref_default_demographics",
+            "pref_fetch_chapters_until_known",
+            "pref_alt_names_in_description",
+            "pref_show_extra_info",
+            "pref_show_tags_in_genres",
+            "pref_score_position",
+        )
 
         private const val DEFAULT_CONTENT_RATING = "suggestive"
         private val chapterListPacer = RequestPacer(minGapMs = 2500, maxGapMs = 5000)
