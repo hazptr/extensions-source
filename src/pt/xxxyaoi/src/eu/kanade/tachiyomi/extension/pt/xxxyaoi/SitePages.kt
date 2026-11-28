@@ -8,20 +8,15 @@ import keiyoushi.utils.WebViewTimeoutException
 import keiyoushi.utils.asJsoup
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.runWebView
-import keiyoushi.utils.sha256
 import keiyoushi.utils.toJsonString
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
-import okhttp3.Response
 import org.jsoup.nodes.Document
 import java.io.IOException
 import java.security.SecureRandom
-import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.time.Duration.Companion.minutes
@@ -32,28 +27,14 @@ import kotlin.time.TimeSource
 internal class SiteRead(
     val document: PageDocument,
     val imageHeaders: Map<String, Map<String, String>>,
-    private val imageStarts: Map<String, ByteArray>,
-) {
-
-    /** The image urls of [document]'s pages, in page order. */
-    fun pageUrls(): List<String>? {
-        val unused = synchronized(imageStarts) { LinkedHashMap(imageStarts) }
-        return document.pages.map { page ->
-            val url = unused.entries.firstOrNull { (_, start) -> start.copyOf(page.length).sha256().toHexString() == page.hash }?.key ?: return null
-            url.also(unused::remove)
-        }
-    }
-}
+)
 
 internal class SitePages(
     private val baseUrl: () -> String,
-    private val client: OkHttpClient,
     private val userAgent: () -> String,
 ) {
 
     private val mutex = Mutex()
-
-    private val imageClient = client.newBuilder().addInterceptor(::recordImageStart).build()
 
     private var lastLoad: TimeMark? = null
 
@@ -79,10 +60,9 @@ internal class SitePages(
         val read = "(${asset("world.js")})(\"$bridge\", (${asset("page.js")})((${asset(readScript)})($args)))"
         val script = if (carrySession) "(${asset("session.js")})(${readerSession.toJsonString()}), $read" else read
         var checkSince: TimeMark? = null
-        var shown = false
+        var shownAt: TimeMark? = null
         val posts = CopyOnWriteArrayList<String>()
         val imageHeaders = ConcurrentHashMap<String, Map<String, String>>()
-        val imageStarts = Collections.synchronizedMap(LinkedHashMap<String, ByteArray>())
 
         val page = try {
             runWebView<PageRead>(timeout = TIMEOUT) {
@@ -98,14 +78,10 @@ internal class SitePages(
                         request.isForMainFrame -> posts.clear()
                         request.method == "POST" && requestHost == host -> posts += request.url.toString()
                     }
-                    if (requestHost == host && request.url.path.orEmpty().contains(IMAGE_PATH)) {
-                        val imageUrl = request.url.toString()
-                        imageHeaders[imageUrl] = request.requestHeaders.filterKeys { it.startsWith("X-", ignoreCase = true) }
-                        imageStarts.putIfAbsent(imageUrl, ByteArray(0))
-                        proxyRequest(request, imageClient) { tag(ImageStart::class.java, ImageStart { imageStarts[imageUrl] = it }) }
-                    } else {
-                        null
+                    if (requestHost == host && request.url.path.orEmpty().contains(ReaderList.IMAGE_PATH)) {
+                        imageHeaders[request.url.toString()] = request.requestHeaders.filterKeys { it.startsWith("X-", ignoreCase = true) }
                     }
+                    null
                 }
                 onReceivedError { request, error ->
                     if (request.isForMainFrame) reject(IOException(error.description.toString()))
@@ -114,14 +90,16 @@ internal class SitePages(
                     val snapshot = message.parseAs<PageRead>()
                     if (snapshot.check) {
                         val since = checkSince ?: TimeSource.Monotonic.markNow().also { checkSince = it }
-                        if (!shown) shown = showToUser(TURNSTILE_AREA)
-                        if (!shown && since.elapsedNow() > CHECK_WAIT) return@webMessageBridge reject(IOException(SOLVE_IN_WEBVIEW))
+                        if (shownAt.let { it == null || it.elapsedNow() > REMEASURE_AFTER }) {
+                            shownAt = if (showToUser(CHECK_AREA)) TimeSource.Monotonic.markNow() else null
+                        }
+                        if (shownAt == null && since.elapsedNow() > CHECK_WAIT) return@webMessageBridge reject(IOException(SOLVE_IN_WEBVIEW))
                         return@webMessageBridge reply.postMessage("")
                     }
                     checkSince = null
-                    if (shown) {
+                    if (shownAt != null) {
                         hideFromUser()
-                        shown = false
+                        shownAt = null
                     }
                     when {
                         snapshot.status != null -> reject(snapshot.title?.ifBlank { null }?.let { IOException("$it (HTTP ${snapshot.status})") } ?: HttpException(snapshot.status))
@@ -146,19 +124,12 @@ internal class SitePages(
         }
         val result = page.result!!
         if (carrySession) readerSession = result.session
-        return SiteRead(result, imageHeaders, imageStarts)
+        return SiteRead(result, imageHeaders)
     }
 
     private fun PageRead.waitsFor(posts: List<String>): Boolean = posts.groupingBy { it }.eachCount().any { (url, started) ->
         val ended = finished.filter { it.url == url }
         ended.size < started || ended.any { it.ago < SETTLE_MS }
-    }
-
-    private fun recordImageStart(chain: Interceptor.Chain): Response {
-        val record = chain.request().tag(ImageStart::class.java) ?: return chain.proceed(chain.request())
-        val response = chain.proceed(chain.request())
-        if (response.isSuccessful) record.onStart(response.peekBody(IMAGE_START_SIZE.toLong()).bytes())
-        return response
     }
 
     private fun randomName() = "k" + ByteArray(8).also(SecureRandom()::nextBytes).toHexString()
@@ -168,9 +139,9 @@ internal class SitePages(
     companion object {
         const val SOLVE_IN_WEBVIEW = "Abra o WebView para passar pela verificação do site"
 
-        const val IMAGE_START_SIZE = 16384
+        private const val CHECK_AREA = "div:has(> * > div > input[name=\"cf-turnstile-response\"]), $TURNSTILE_AREA"
 
-        private const val IMAGE_PATH = "/WP-manga/data/"
+        private val REMEASURE_AFTER = 1.seconds
 
         private val TIMEOUT = 2.minutes
 
@@ -181,5 +152,3 @@ internal class SitePages(
         private const val SETTLE_MS = 500
     }
 }
-
-private class ImageStart(val onStart: (ByteArray) -> Unit)

@@ -50,7 +50,7 @@ abstract class XXXYaoi : KeiSource() {
         rateLimit(3, 1.seconds)
     }
 
-    private val sitePages by lazy { SitePages({ baseUrl }, client) { headers["User-Agent"]!! } }
+    private val sitePages by lazy { SitePages({ baseUrl }) { headers["User-Agent"]!! } }
 
     override fun getHomeUrl() = "$baseUrl/biblioteca/"
 
@@ -165,10 +165,11 @@ abstract class XXXYaoi : KeiSource() {
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val chapterUrl = getChapterUrl(chapter)
         val seriesUrl = chapterUrl.toHttpUrl().resolve("..")!!.toString()
-        val load = suspend { sitePages.read(chapterUrl, "reader.js", SitePages.IMAGE_START_SIZE.toString(), carrySession = true, referer = seriesUrl) }
+        val load = suspend { sitePages.read(chapterUrl, "reader.js", ReaderList.IMAGE_PATH.toJsonString(), carrySession = true, referer = seriesUrl) }
         val read = load().let { if (it.document.reload) load() else it }
         val reader = read.document
-        if (reader.pages.isEmpty()) {
+        val pageUrl = reader.pageUrl
+        if (pageUrl == null) {
             val document = reader.html.asJsoup(reader.url)
             if (document.selectFirst("iframe[src*=player]") != null) return emptyList()
             if (document.selectFirst("iframe[src*=challenges.cloudflare.com], input[name=cf-turnstile-response]:not([value~=.])") != null) {
@@ -176,11 +177,10 @@ abstract class XXXYaoi : KeiSource() {
             }
             throw IOException(PAGES_NOT_LOADED)
         }
-        val imageUrls = read.pageUrls() ?: throw IOException(PAGES_NOT_LOADED)
-        return imageUrls.mapIndexed { index, imageUrl ->
-            val siteHeaders = read.imageHeaders[imageUrl].orEmpty().toJsonString()
-            Page(index, url = reader.url.toHttpUrl().newBuilder().fragment(siteHeaders).build().toString(), imageUrl = imageUrl)
-        }
+        val imageUrls = ReaderList.pageUrls(reader.lists, pageUrl) ?: throw IOException(PAGES_NOT_LOADED)
+        val siteHeaders = read.imageHeaders[pageUrl].orEmpty().toJsonString()
+        val pageListUrl = reader.url.toHttpUrl().newBuilder().fragment(siteHeaders).build().toString()
+        return imageUrls.mapIndexed { index, imageUrl -> Page(index, url = pageListUrl, imageUrl = imageUrl) }
     }
 
     override fun getImageRequest(page: Page): Request {

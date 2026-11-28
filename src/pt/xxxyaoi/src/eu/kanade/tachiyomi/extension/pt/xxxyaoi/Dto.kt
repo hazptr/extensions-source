@@ -19,12 +19,10 @@ class PageDocument(
     val url: String,
     val html: String,
     val session: Map<String, String> = emptyMap(),
-    val pages: List<PageStart> = emptyList(),
+    val lists: List<String> = emptyList(),
+    val pageUrl: String?,
     val reload: Boolean = false,
 )
-
-@Serializable
-class PageStart(val length: Int, val hash: String)
 
 @Serializable
 class Genre(val name: String, val slug: String)

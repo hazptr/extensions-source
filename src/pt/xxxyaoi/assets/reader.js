@@ -1,56 +1,42 @@
-(startSize) => {
-    const fingerprint = (image) =>
-        fetch(image.src)
-            .then((response) => response.blob())
-            .then((blob) => blob.slice(0, startSize).arrayBuffer())
-            .then((buffer) =>
-                crypto.subtle.digest('SHA-256', buffer).then((hash) => ({
-                    length: buffer.byteLength,
-                    hash: [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join(''),
-                })),
-            );
+(imagePath) => {
+    const lists = [];
+    new MutationObserver((records) => {
+        for (const record of records) {
+            for (const node of record.addedNodes) {
+                if (node.nodeType !== Node.ELEMENT_NODE) continue;
+                if (node.matches('script[type="text/plain"]')) lists.push(node);
+                lists.push(...node.querySelectorAll('script[type="text/plain"]'));
+            }
+        }
+    }).observe(document, { childList: true, subtree: true });
 
-    let pages = null;
-    let state = '';
-    let changedAt = 0;
+    let completeAt = 0;
     let solvedAt = 0;
     return () => {
         if (document.readyState !== 'complete') return null;
-        const snapshot = (list) => ({
+        const snapshot = (pageUrl) => ({
             url: location.href,
             html: document.documentElement.outerHTML,
             session: { ...sessionStorage },
-            pages: list,
+            lists: lists.map((node) => node.textContent),
+            pageUrl,
         });
-        if (document.querySelector('iframe[src*="player"]')) return snapshot([]);
-        if (pages) return snapshot(pages);
-        const shown = [...document.images].filter((image) => image.src.startsWith('blob:'));
-        const slots = shown.length ? [...shown[0].parentElement.parentElement.querySelectorAll('img')] : [];
-        const pending = slots.filter((image) => !image.src.startsWith('blob:'));
-        const loaded = slots.length && !pending.length;
-        if (loaded && state !== 'ordering') {
-            Promise.all(slots.map(fingerprint)).then(
-                (list) => {
-                    pages = list;
-                },
-                () => {
-                    pages = [];
-                },
-            );
-        }
-        pending[0]?.scrollIntoView({ block: 'center' });
+        if (document.querySelector('iframe[src*="player"]')) return snapshot(null);
+        const image = performance
+            .getEntriesByType('resource')
+            .find((entry) => entry.name.includes(imagePath) && entry.responseStatus === 200);
+        if (image) return snapshot(image.name);
+        if (document.querySelector('.reading-content button[onclick*="reload"]')) return { ...snapshot(null), reload: true };
         const tokens = [...document.querySelectorAll('[name="cf-turnstile-response"]')];
-        const gate = tokens.some((input) => !input.value) ? 'gate' : '';
-        const now = loaded ? 'ordering' : `${shown.length}/${slots.length}${gate}`;
-        if (now !== state) {
-            state = now;
-            changedAt = Date.now();
+        if (tokens.some((input) => !input.value)) {
+            completeAt = 0;
+            return null;
         }
-        if (!gate && Date.now() - changedAt > 20000) return snapshot([]);
-        if (!slots.length && tokens.some((input) => input.value)) {
+        if (tokens.length) {
             solvedAt ||= Date.now();
-            if (Date.now() - solvedAt > 3000) return { ...snapshot([]), reload: true };
+            if (Date.now() - solvedAt > 3000) return { ...snapshot(null), reload: true };
         }
-        return null;
+        completeAt ||= Date.now();
+        return Date.now() - completeAt > 20000 ? snapshot(null) : null;
     };
 }
