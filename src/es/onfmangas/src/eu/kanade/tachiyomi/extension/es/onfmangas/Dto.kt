@@ -2,10 +2,11 @@ package eu.kanade.tachiyomi.extension.es.onfmangas
 
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
+import keiyoushi.utils.toJsonString
 import keiyoushi.utils.tryParseDateTime
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl
 import org.jsoup.parser.Parser
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -16,12 +17,12 @@ private val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Loca
 @Serializable
 class ChapterDto(
     private val url: String,
-    @SerialName("titulo_str") private val displayTitle: String? = null,
-    private val titulo: String? = null,
+    @SerialName("titulo_str") private val displayTitle: String?,
+    private val titulo: String?,
     private val numero: String,
-    @SerialName("fecha_subida") val date: String? = null,
-    @SerialName("grupos_list") private val groups: List<GroupDto>? = null,
-    @SerialName("otras_versiones") private val otherVersions: List<ChapterDto>? = null,
+    @SerialName("fecha_subida") val date: String?,
+    @SerialName("grupos_list") private val groups: List<GroupDto>?,
+    @SerialName("otras_versiones") private val otherVersions: List<ChapterDto>?,
 ) {
     val numberFloat: Float get() = numero.toFloat()
 
@@ -62,11 +63,6 @@ class GenreDto(
 )
 
 @Serializable
-class ReaderPagesRequest(
-    private val access: String,
-)
-
-@Serializable
 class ReaderPagesResponse(
     val pages: List<PageDto>,
 )
@@ -74,10 +70,15 @@ class ReaderPagesResponse(
 @Serializable
 class PageDto(
     private val src: String,
+    private val fallback: String,
+    private val proxy: String,
 ) {
-    fun toPage(index: Int, chapterUrl: String) = Page(
+    fun toPage(index: Int, chapterUrl: HttpUrl) = Page(
         index = index,
-        url = chapterUrl,
-        imageUrl = chapterUrl.toHttpUrl().resolve(src)!!.toString(),
+        url = chapterUrl.newBuilder()
+            .fragment(listOf(fallback, proxy).filter { it.isNotEmpty() }.toJsonString())
+            .build()
+            .toString(),
+        imageUrl = chapterUrl.resolve(src)!!.toString(),
     )
 }

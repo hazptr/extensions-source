@@ -17,16 +17,16 @@ import keiyoushi.network.get
 import keiyoushi.network.post
 import keiyoushi.source.KeiSource
 import keiyoushi.source.SMangaUpdate
+import keiyoushi.utils.JSON_MEDIA_TYPE
+import keiyoushi.utils.MarkdownDescription
 import keiyoushi.utils.asJsoup
 import keiyoushi.utils.attrOrNull
-import keiyoushi.utils.decodeHex
 import keiyoushi.utils.firstInstanceOrNull
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.selectLast
 import keiyoushi.utils.textOrNull
 import keiyoushi.utils.toJsonElement
-import keiyoushi.utils.toJsonRequestBody
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Cookie
 import okhttp3.HttpUrl
@@ -34,9 +34,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import java.io.IOException
+import kotlin.time.Clock
 
 @Source
 abstract class OnfMangas :
@@ -48,19 +50,27 @@ abstract class OnfMangas :
     override fun OkHttpClient.Builder.configureClient(): OkHttpClient.Builder = addInterceptor(::onfTokenInterceptor)
         .addInterceptor(::pageRetryInterceptor)
 
-    // The site's reader retries a failed page with a fresh `retry` parameter, past Cloudflare's stale cached redirect
+    // The site's reader tries each of a page's urls in turn, then the last one again with a fresh `retry` parameter
     private fun pageRetryInterceptor(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        if (request.url.pathSegments[0] != "reader_image.php") return chain.proceed(request)
+        val page = request.tag(PageUrls::class.java) ?: return chain.proceed(request)
 
-        val response = chain.proceed(request)
-        if (response.isSuccessful) return response
+        val urls = listOf(request.url) + page.alternatives
+        for (url in urls) {
+            val response = try {
+                chain.proceed(pageImageRequest(url, page.chapterUrl))
+            } catch (e: IOException) {
+                if (chain.call().isCanceled()) throw e
+                continue
+            }
+            if (response.isSuccessful) return response
+            response.close()
+        }
 
-        response.close()
-        val url = request.url.newBuilder()
-            .setQueryParameter("retry", System.currentTimeMillis().toString())
+        val retryUrl = urls.last().newBuilder()
+            .setQueryParameter("retry", Clock.System.now().toEpochMilliseconds().toString())
             .build()
-        return chain.proceed(request.newBuilder().url(url).build())
+        return chain.proceed(pageImageRequest(retryUrl, page.chapterUrl))
     }
 
     private fun onfTokenInterceptor(chain: Interceptor.Chain): Response {
@@ -70,7 +80,7 @@ abstract class OnfMangas :
         if (response.body.contentType()?.subtype != "html") return response
         if ("Verificando" !in response.peekBody(8192).string()) return response
 
-        val cookieString = solveOnfCheck(response) ?: throw IOException("Failed to solve cookie challenge")
+        val cookieString = solveOnfCheck(response) ?: throw IOException(CHECK_FAILED)
         val cookie = Cookie.parse(request.url, cookieString)
         client.cookieJar.saveFromResponse(request.url, listOfNotNull(cookie))
 
@@ -79,7 +89,7 @@ abstract class OnfMangas :
 
     private fun solveOnfCheck(response: Response): String? {
         val document = response.asJsoup()
-        val script = document.selectFirst("script")?.data() ?: throw IOException("Failed to find cookie challenge script")
+        val script = document.selectFirst("script")?.data() ?: throw IOException(CHECK_FAILED)
 
         return QuickJs.create().use { js ->
             js.evaluate(
@@ -163,11 +173,10 @@ abstract class OnfMangas :
     private fun parseMangaDetails(document: Document): SManga = SManga.create().apply {
         title = document.selectFirst(".manga-title")!!.text()
         author = document.selectFirst(".author-link")?.textOrNull()?.takeUnless { it in authorPlaceholders }
-        description = listOfNotNull(
-            document.selectFirst(".manga-description")?.textOrNull()?.takeUnless { it == "Información no completada" },
-            document.select(".onf-alt-desktop .mal-alt-titulo").eachText().ifEmpty { null }
-                ?.joinToString("\n", prefix = "**Nombres alternativos:**\n") { "- $it" },
-        ).joinToString("\n\n").ifEmpty { null }
+        description = MarkdownDescription.Builder()
+            .description(document.selectFirst(".manga-description")?.textOrNull()?.takeUnless { it == "Información no completada" })
+            .altTitles(document.select(".onf-alt-desktop .mal-alt-titulo").eachText(), "Nombres alternativos")
+            .build()
         genre = document.select(".genre-tag").eachText().joinToString().ifEmpty { null }
         thumbnail_url = document.selectFirst(".manga-poster")?.attrOrNull("abs:src")
 
@@ -180,10 +189,14 @@ abstract class OnfMangas :
     }
 
     private fun parseChapterList(document: Document): List<SChapter> {
-        val json = document.decodeHexVariable("_hex") ?: return emptyList()
+        val chapters = document.selectFirst("script:containsData(const chaptersData =)")!!.data()
+            .substringAfter("const chaptersData = ")
+            .substringBefore("\n")
+            .trim()
+            .removeSuffix(";")
         val onePerGroup = preferences.getBoolean(PREF_ONE_PER_GROUP, false)
 
-        return json.parseAs<List<ChapterDto>>()
+        return chapters.parseAs<List<ChapterDto>>()
             .sortedWith(compareByDescending<ChapterDto> { it.numberFloat }.thenByDescending { it.date })
             .flatMap { it.toSChapters(onePerGroup) }
     }
@@ -191,17 +204,49 @@ abstract class OnfMangas :
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         val chapterUrl = getChapterUrl(chapter)
         val document = client.get(chapterUrl, Fetch.DOCUMENT).asJsoup()
-        val access = document.selectFirst("#viewerContainer[data-reader-access]")!!.attr("data-reader-access")
-        return client.post("$baseUrl/reader_pages.php", Fetch.XHR.from(chapterUrl), ReaderPagesRequest(access).toJsonRequestBody())
+        val script = document.selectFirst("script:containsData(/reader_pages.php)")!!.data()
+        val body = readerPagesBody(script) ?: return emptyList()
+        return client.post("$baseUrl/reader_pages.php", Fetch.XHR.from(chapterUrl), body.toRequestBody(JSON_MEDIA_TYPE))
             .parseAs<ReaderPagesResponse>()
             .pages
-            .mapIndexed { index, dto -> dto.toPage(index, document.location()) }
+            .mapIndexed { index, dto -> dto.toPage(index, document.location().toHttpUrl()) }
     }
 
-    // The site's image proxy answers 403 without the chapter page as Referer
-    override fun getImageRequest(page: Page): Request = super.getImageRequest(page).newBuilder()
-        .fetch(imageFetch.from(page.url))
-        .build()
+    // The reader script's own request body for its page list, null when the chapter has no pages
+    private fun readerPagesBody(script: String): String? = QuickJs.create().use { js ->
+        js.evaluate(
+            """
+            var body;
+            var window = {};
+            var fetch = function(url, options) {
+                if (url.indexOf('/reader_pages.php') !== -1) body = options.body;
+                return { then: function() { return this; } };
+            };
+
+            $script
+
+            body;
+            """.trimIndent(),
+        ) as String?
+    }
+
+    override fun getImageRequest(page: Page): Request {
+        val pageUrl = page.url.toHttpUrl()
+        // Page lists the app cached from before carry no fragment
+        val alternatives = pageUrl.fragment?.parseAs<List<String>>().orEmpty().map { pageUrl.resolve(it)!! }
+        return pageImageRequest(page.imageUrl!!.toHttpUrl(), pageUrl).newBuilder()
+            .tag(PageUrls::class.java, PageUrls(pageUrl, alternatives))
+            .build()
+    }
+
+    // The site's reader sends the chapter page as Referer to its own image proxy only, which answers 403 without it
+    private fun pageImageRequest(url: HttpUrl, chapterUrl: HttpUrl): Request = if (url.host == chapterUrl.host) {
+        Request.Builder().url(url).headers(headers).fetch(Fetch.IMAGE.from(chapterUrl)).build()
+    } else {
+        Request.Builder().url(url).headers(headersBuilder().removeAll("Referer").build()).fetch(Fetch.IMAGE).build()
+    }
+
+    private class PageUrls(val chapterUrl: HttpUrl, val alternatives: List<HttpUrl>)
 
     override suspend fun fetchFilterData(): JsonElement {
         val document = client.get("$baseUrl/mangas.php", Fetch.DOCUMENT).asJsoup()
@@ -226,14 +271,8 @@ abstract class OnfMangas :
         }.also(screen::addPreference)
     }
 
-    private fun Document.decodeHexVariable(name: String): String? = selectFirst("script:containsData(const $name =)")
-        ?.data()
-        ?.substringAfter("const $name = \"")
-        ?.substringBefore("\";")
-        ?.decodeHex()
-        ?.decodeToString()
-
     companion object {
         private const val PREF_ONE_PER_GROUP = "one_version_per_group"
+        private const val CHECK_FAILED = "No se pudo pasar la verificación del sitio, ábrelo en WebView"
     }
 }
