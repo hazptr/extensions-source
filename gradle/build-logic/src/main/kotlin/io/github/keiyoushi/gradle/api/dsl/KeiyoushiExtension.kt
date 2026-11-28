@@ -12,6 +12,8 @@ abstract class KeiyoushiExtension @Inject constructor(
     private val objects: ObjectFactory,
 ) {
     abstract val name: Property<String>
+
+    @Deprecated("Ignored: CI sets the version from the published repo")
     abstract val versionCode: Property<Int>
     abstract val contentWarning: Property<ContentWarning>
     abstract val theme: Property<String>

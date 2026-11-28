@@ -13,7 +13,7 @@ LIB_REGEX = re.compile(r"^lib/(?P<lib>\w+)")
 MODULE_REGEX = re.compile(r"^:src:(?P<lang>\w+):(?P<extension>\w+)$")
 PKG_NAME_REGEX = re.compile(r"""pkgName\s*=\s*["']([^"']+)["']""")
 CORE_FILES_REGEX = re.compile(
-    r"^(common/|compiler/|core/|gradle/|build\.gradle\.kts|gradle\.properties|settings\.gradle\.kts|\.github/scripts/(publish-repo\.py|index))"
+    r"^(common/|compiler/|core/|gradle/|build\.gradle\.kts|gradle\.properties|settings\.gradle\.kts|\.github/scripts/(publish-repo\.py|versions\.py|index))"
 )
 
 def run_command(command: str) -> str:
@@ -149,8 +149,9 @@ def resolve_ext(multisrcs: set[str], libs: set[str]) -> set[tuple[str, str]]:
 
     return extensions
 
-def get_module_list(ref: str) -> tuple[list[str], list[str], list[str], bool]:
-    diff_output = run_command(f"git diff --name-status {ref}").splitlines()
+def get_module_list(ref: str, head: str = "") -> tuple[list[str], list[str], list[str], bool]:
+    """modules changed between ref and head (the working tree by default)"""
+    diff_output = run_command(f"git diff --name-status {ref} {head}").splitlines()
 
     changed_files = [
         file

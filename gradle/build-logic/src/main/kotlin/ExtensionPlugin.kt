@@ -24,6 +24,9 @@ import io.github.keiyoushi.gradle.internal.extensions.lintChecks
 import io.github.keiyoushi.gradle.internal.extensions.plugins
 import io.github.keiyoushi.gradle.internal.extensions.testImplementation
 import io.github.keiyoushi.gradle.internal.extensionsLib
+import io.github.keiyoushi.gradle.internal.libVersionBase
+import io.github.keiyoushi.gradle.internal.nextVersionCode
+import io.github.keiyoushi.gradle.internal.publishedVersionCodes
 import io.github.keiyoushi.gradle.internal.toMetadata
 import io.github.keiyoushi.gradle.tasks.ComputeContentHashTask
 import io.github.keiyoushi.gradle.tasks.CreateExtensionJarTask
@@ -117,10 +120,6 @@ class ExtensionPlugin : Plugin<Project> {
                 includeInApk = false
             }
 
-            buildFeatures {
-                buildConfig = true
-            }
-
             packaging {
                 resources.excludes.add("kotlin-tooling-metadata.json")
             }
@@ -131,26 +130,21 @@ class ExtensionPlugin : Plugin<Project> {
                 ?: throw AssertionError("Theme project :lib-multisrc:$themeName must apply kei.plugins.multisrc")
         }
 
-        val versionCodeProvider = themeExtension.flatMap { themeKeiyoushi ->
-            val themeLib = themeKeiyoushi.libVersion.get()
-            val extLib = keiyoushi.libVersion.get()
-            check(themeLib == extLib) {
-                "Multisrc libVersion ($themeLib) and extension libVersion ($extLib) must match."
-            }
-            themeKeiyoushi.baseVersionCode.zip(keiyoushi.versionCode) { base, ext -> base + ext }
-        }.orElse(keiyoushi.versionCode)
-
-        val versionNameProvider = keiyoushi.libVersion.flatMap { libVersion ->
+        val libVersionProvider = keiyoushi.libVersion.map { libVersion ->
             check(libVersion in VALID_LIB_VERSIONS) {
                 "libVersion $libVersion is not supported. Supported versions: $VALID_LIB_VERSIONS"
             }
-            versionCodeProvider.map { "$libVersion.$it" }
+            libVersion
         }
 
-        val androidVersionCodeProvider = keiyoushi.libVersion.flatMap { libVersion ->
-            versionCodeProvider.map { versionCode ->
-                libVersion.split(".").joinToString("") { it.padStart(2, '0') }.toInt().times(1000) + versionCode
+        val androidVersionCodeProvider = libVersionProvider
+            .zip(pkgName) { libVersion, suffix -> libVersion to "eu.kanade.tachiyomi.extension.$suffix" }
+            .zip(publishedVersionCodes()) { (libVersion, packageName), published ->
+                nextVersionCode(packageName, libVersion, published)
             }
+
+        val versionNameProvider = libVersionProvider.zip(androidVersionCodeProvider) { libVersion, code ->
+            "$libVersion.${code - libVersionBase(libVersion)}"
         }
 
         configureRuntimeConsumer(provider { "eu.kanade.tachiyomi.extension.$dirSuffix" })
@@ -251,7 +245,8 @@ class ExtensionPlugin : Plugin<Project> {
                         keyAlias.set(signingConfig.keyAlias.orEmpty())
                         keyPassword.set(signingConfig.keyPassword.orEmpty())
                         minSdkVersion.set(kei.versions.android.sdk.min.map { it.toInt() })
-                        outputJar.set(layout.buildDirectory.file(filenameProvider.map { "outputs/jar/${variant.name}/$it.jar" }))
+                        val jarDir = "outputs/jar/${variant.name}"
+                        outputJar.set(layout.buildDirectory.file(filenameProvider.map { "$jarDir/$it.jar" }))
                     }
 
                     val contentHashTask = tasks.register<ComputeContentHashTask>("compute${variantName}ContentHash") {
@@ -286,6 +281,13 @@ class ExtensionPlugin : Plugin<Project> {
             check(specs.isNotEmpty()) { "At least one source { } block is required" }
 
             val extName = keiyoushi.name.get()
+            themeExtension.orNull?.let { themeKeiyoushi ->
+                val themeLib = themeKeiyoushi.libVersion.get()
+                val extLib = keiyoushi.libVersion.get()
+                check(themeLib == extLib) {
+                    "Multisrc libVersion ($themeLib) and extension libVersion ($extLib) must match."
+                }
+            }
             val resolvedSources = specs.map { spec ->
                 val name = spec.name.orElse(extName).get()
                 val lang = spec.lang.get()

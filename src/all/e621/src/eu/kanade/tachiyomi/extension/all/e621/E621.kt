@@ -2,7 +2,6 @@ package eu.kanade.tachiyomi.extension.all.e621
 
 import android.content.SharedPreferences
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.extension.BuildConfig
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -46,7 +45,7 @@ abstract class E621 :
 
     @Volatile private var cachedAccountBlockedTagsCredentials: String? = null
 
-    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("User-Agent", "E621/1.6.${BuildConfig.VERSION_CODE} Keiyoushi (https://github.com/keiyoushi/extensions-source)")
+    override fun Headers.Builder.configureHeaders(): Headers.Builder = set("User-Agent", "E621/1.6 Keiyoushi (https://github.com/keiyoushi/extensions-source)")
 
     private fun apiHeaders(): Headers = headersBuilder().apply {
         val username = preferences.usernamePref.trim()

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import time
 
 REPO_NAME = "keiyoushi/extensions"
@@ -44,7 +45,8 @@ def run_gh(*args: str, success_errors: tuple[str, ...] = ()) -> str:
 
         print(
             f"GitHub rate limit hit; retrying in {retry_delay}s "
-            f"(attempt {attempt}/{RETRY_ATTEMPTS})"
+            f"(attempt {attempt}/{RETRY_ATTEMPTS})",
+            file=sys.stderr,
         )
         time.sleep(retry_delay)
         attempt += 1

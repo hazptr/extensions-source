@@ -1,7 +1,5 @@
 Checklist:
 
-- [ ] Updated `versionCode` value in `build.gradle.kts`
-- [ ] Updated `baseVersionCode` in `build.gradle.kts` (if updated multisrc theme code)
 - [ ] Referenced all related issues in the PR body (e.g. "Closes #xyz")
 - [ ] Set the `contentWarning` configuration in `build.gradle.kts` appropriately
 - [ ] Have not changed source names

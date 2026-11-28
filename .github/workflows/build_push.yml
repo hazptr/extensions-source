@@ -21,9 +21,10 @@ on:
 
 permissions: {}
 
+# Runs never overlap: each one's builds are versioned from the versions.json the previous one published
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CI_CHUNK_SIZE: 80
@@ -37,10 +38,12 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: read
+      pull-requests: read
     outputs:
       matrix: ${{ steps.generate-matrices.outputs.matrix }}
       delete: ${{ steps.generate-matrices.outputs.delete }}
       full_rebuild: ${{ steps.base.outputs.full_rebuild || steps.generate-matrices.outputs.full_rebuild }}
+      skip_bump: ${{ steps.skip-bump.outputs.skip_bump }}
     steps:
       - name: Checkout main branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,6 +75,44 @@ jobs:
           BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
           python ./.github/scripts/generate-build-matrices.py "$BASE_SHA"
+
+      - id: skip-bump
+        name: Check for "Skip version bump" labels
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          skip_bump=$(python ./.github/scripts/find-skip-bump.py "$BASE_SHA")
+          echo "skip_bump=$skip_bump" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repo branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: keiyoushi/extensions
+          ref: repo
+          path: .repo-branch
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Get published versions
+        run: |
+          mkdir -p "$RUNNER_TEMP/versions"
+          if [ -f .repo-branch/versions.json ]; then
+            cp .repo-branch/versions.json "$RUNNER_TEMP/versions/versions.json"
+          elif [ -z "$(git -C .repo-branch log -1 --format=%H -- versions.json)" ]; then
+            # First run: build it from the repo branch's history
+            python ./.github/scripts/seed-versions.py .repo-branch "$RUNNER_TEMP/versions/versions.json"
+          else
+            echo "::error::versions.json was deleted from the repo branch; restore it from the branch's history"
+            exit 1
+          fi
+
+      - name: Upload published versions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-versions
+          path: ${{ runner.temp }}/versions/versions.json
+          retention-days: 1
 
   build:
     name: Populate Gradle cache
@@ -138,6 +179,12 @@ jobs:
         with:
           cache-read-only: true
 
+      - name: Download published versions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: published-versions
+          path: ${{ runner.temp }}/versions
+
       - name: Prepare signing key
         run: |
           echo ${{ secrets.SIGNING_KEY }} | base64 -d > signingkey.jks
@@ -153,7 +200,7 @@ jobs:
           for module in $MODULES; do
             TASKS+=("${module}:assembleRelease")
           done
-          ./gradlew "${TASKS[@]}"
+          ./gradlew "${TASKS[@]}" "-Pkei.publishedVersions=$RUNNER_TEMP/versions/versions.json"
 
       - name: Upload APKs (${{ matrix.chunk.number }})
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -185,6 +232,7 @@ jobs:
     if: >-
       always() &&
       github.repository == 'keiyoushi/extensions-source' &&
+      github.ref == 'refs/heads/main' &&
       needs.prepare.result == 'success' &&
       needs.build-extensions.result != 'failure' &&
       needs.build-extensions.result != 'cancelled' &&
@@ -196,7 +244,14 @@ jobs:
         if: needs.build-extensions.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: individual-apks-*
           path: ~/apk-artifacts
+
+      - name: Download published versions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: published-versions
+          path: ~/versions
 
       - name: Checkout main branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -218,11 +273,12 @@ jobs:
         env:
           DELETE: ${{ needs.prepare.outputs.delete }}
           FULL_REBUILD: ${{ needs.prepare.outputs.full_rebuild }}
+          SKIP_BUMP: ${{ needs.prepare.outputs.skip_bump }}
           GH_TOKEN: ${{ secrets.BOT_PAT }}
         run: |
           cd repo
           python -m pip install --user --upgrade protobuf
-          python -u ../main/.github/scripts/publish-repo.py "$DELETE" "$GITHUB_SHA" "$FULL_REBUILD"
+          python -u ../main/.github/scripts/publish-repo.py "$DELETE" "$GITHUB_SHA" "$FULL_REBUILD" "$SKIP_BUMP" ~/versions/versions.json
           git config --global user.email "156378334+keiyoushi-bot@users.noreply.github.com"
           git config --global user.name "keiyoushi-bot"
           git status

@@ -81,9 +81,6 @@ def write_gradle_file(args: argparse.Namespace, ext_dir: Path) -> None:
 
         if args.multisrc:
             f.write(f'\ttheme = "{args.multisrc}"\n')
-            f.write("\tversionCode = 0\n")
-        else:
-            f.write("\tversionCode = 1\n")
 
         f.write(f"\tcontentWarning = ContentWarning.{args.content_warning}\n")
         f.write(f'\tlibVersion = "{args.lib_version}"\n\n')

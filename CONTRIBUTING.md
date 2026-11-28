@@ -345,7 +345,6 @@ plugins {
 
 keiyoushi {
     name = "Example" // Replace with your actual source name
-    versionCode = 1
     contentWarning = ContentWarning.NSFW // Options: ContentWarning.SAFE, ContentWarning.MIXED, ContentWarning.NSFW
     libVersion = "1.6"
 
@@ -362,16 +361,15 @@ At least one `source {}` block is required for every extension.
 | Field            | Description                                                                                                                                                                                                                               |
 |------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `name`           | The name of the extension. Should be romanized if site name is not in English.                                                                                                                                                            |
-| `versionCode`    | The extension version code. This must be a positive integer and incremented with any change to the code. Do not bump for changes that do not affect users, such as changing a private function to a public function.                      |
 | `contentWarning` | Content safety classification. Must be set explicitly to one of `ContentWarning.SAFE`, `ContentWarning.MIXED`, or `ContentWarning.NSFW`.                                                                                                  |
 | `libVersion`     | The extension library version. Must be `"1.6"`; the source class must implement `KeiSource` (see [Extension main class](#extension-main-class)). |
-| `theme`          | Name of a multi-source theme from `lib-multisrc/` to inherit from (e.g. `"madara"`). When set, the extension's version code is `theme.baseVersionCode + versionCode`.                                                                     |
+| `theme`          | Name of a multi-source theme from `lib-multisrc/` to inherit from (e.g. `"madara"`).                                                                                                                                                      |
 | `pkgName`        | Overrides the application ID suffix (defaults to `<lang>.<source dir>` derived from the module path). Only needed when moving a module to a different directory - see [Moving a source to a different directory](#moving-a-source-to-a-different-directory). |
 | `source {}`      | Declares one source (or multiple, for multi-language or multi-mirror extensions) using KSP code generation. This block is mandatory. See [Source declaration](#source-declaration).                                                       |
 | `deeplink {}`    | Declares a URL deeplink intent filter. See [URL intent filter](#url-intent-filter).                                                                                                                                                       |
 
-The extension's version name is generated automatically by concatenating `libVersion` and the calculated version code.
-With the example used above, the version would be `1.6.1`.
+The extension's version name is `libVersion` followed by the version CI assigns (e.g. `1.6.4`); there is no
+version to set. See [Versioning](#versioning).
 
 ### Source declaration
 
@@ -401,7 +399,6 @@ Add one or more `source {}` blocks inside `keiyoushi {}`:
 ```kotlin
 keiyoushi {
     name = "My Source"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
@@ -497,7 +494,6 @@ To expose multiple sources (previously done with `SourceFactory`), add multiple 
 ```kotlin
 keiyoushi {
     name = "Example"
-    versionCode = 1
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
@@ -1903,7 +1899,6 @@ plugins {
 }
 
 keiyoushi {
-    baseVersionCode = 1
     libVersion = "1.6"
 }
 ```
@@ -1912,7 +1907,6 @@ If the CMS generates URLs with a consistent structure shared by all sites built 
 
 ```kotlin
 keiyoushi {
-    baseVersionCode = 1
     libVersion = "1.6"
 
     deeplink {
@@ -1926,7 +1920,6 @@ When no `host()` is specified in a theme `deeplink {}` block, the host is resolv
 
 | Field             | Description                                                                                                                                                                                                                                                              |
 |-------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `baseVersionCode` | The theme's base version code. This must be a positive integer and **incremented** whenever a change is made to the theme implementation that affects the extensions.                                                                                                    |
 | `libVersion`      | The extension library version. Must be `"1.6"`, and the theme's main class must extend `KeiSource`. Every extension using the theme inherits this value and must not set its own `libVersion`. |
 | `deeplink {}`     | Declares URL deeplink patterns inherited by all extensions using this theme. See [URL intent filter](#url-intent-filter).                                                                                                                                                |
 
@@ -1959,7 +1952,6 @@ To use a theme in your extension, follow the regular extension creation steps an
 keiyoushi {
     name = "Example" // Replace with your actual source name
     theme = "example" // Replace with your actual theme name
-    versionCode = 1
     contentWarning = ContentWarning.NSFW
     libVersion = "1.6" // Must match the theme's own libVersion
 
@@ -1982,8 +1974,6 @@ abstract class MySource : ExampleTheme() { // Replace 'ExampleTheme' with your t
     // override theme defaults as needed
 }
 ```
-
-The final extension version code is automatically calculated during the build as `theme.baseVersionCode + versionCode`.
 
 Because themes are provided as libraries, your extension's main class inherits directly from the theme's base class.
 
@@ -2172,6 +2162,20 @@ Run lint directly on shared modules, such as
 Linting only an extension that depends on a shared module does not reliably report issues in the
 dependency itself. If you explicitly changed `core/`, run `./gradlew :core:lintRelease` as well.
 
+## Versioning
+
+CI sets every extension's version when it publishes the repo. An extension gets a new version whenever its build
+output changes, whatever caused it: its own code, a theme, a lib or core. A build identical to the published one
+keeps its version. `versions.json` on the repo branch holds each package's last published version, removed
+packages included, so a package that comes back continues from its old version.
+
+A PR whose changes shouldn't reach users as an update (a build tooling change, for example) gets the
+`Skip version bump` label: extensions that only labelled PRs changed keep their published version and apk until an
+unlabelled change or a full rebuild rebuilds them.
+
+Local builds are versioned `<libVersion>.0`. To build with the versions CI would assign, download `versions.json` from
+the repo branch and pass `-Pkei.publishedVersions=<path>`.
+
 ## Submitting the changes
 
 When you feel confident about your changes, submit a new Pull Request for review. We encourage following a [GitHub Standard Fork & Pull Request Workflow](https://gist.github.com/Chaser324/ce0505fbed06b947d962); avoid committing directly to `main` and always create a new branch for your changes.
@@ -2189,8 +2193,6 @@ Please **test your changes by compiling through Android Studio** before submitti
 
 ### Pull Request checklist
 
-- Updated `versionCode` value in `build.gradle.kts`
-- Updated `baseVersionCode` in `build.gradle.kts` (if updated multisrc theme code)
 - Referenced all related issues in the PR body (e.g. "Closes #xyz")
 - Set the `contentWarning` configuration in `build.gradle.kts` appropriately
 - Have not changed source names

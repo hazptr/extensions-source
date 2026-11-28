@@ -5,9 +5,11 @@ import json
 import math
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import index_pb2
+import versions
 from github_utils import REPO_NAME, run_gh
 from google.protobuf import json_format
 
@@ -31,27 +33,30 @@ current_sha_short = current_sha[:7]
 # nothing is carried over from the published index. This is what drops extensions deleted
 # from the source tree, which a diff against the empty tree can't see.
 full_rebuild = sys.argv[3] == "true"
+# Package suffixes changed only by PRs labelled to skip version bumps (see find-skip-bump.py): they
+# keep their published apk and version. New extensions are still published.
+skip_bump: set[str] = set(json.loads(sys.argv[4]))
+# The versions.json the build jobs were given (see prepare in build_push.yml)
+build_versions_path = Path(sys.argv[5])
 
-with REPO_DIR.joinpath("index.json").open() as f:
-    remote_proto = json_format.Parse(f.read(), index_pb2.Index())
+remote_proto = index_pb2.Index()
+remote_proto.ParseFromString(gzip.decompress(REPO_DIR.joinpath("index.pb").read_bytes()))
 
 remote_extensions = {
     ext.packageName: ext for ext in remote_proto.extensionList.extensions
 }
 
-release_assets_path = REPO_DIR / "release-assets.json"
-if release_assets_path.exists():
-    with release_assets_path.open() as f:
-        release_assets = json.load(f)
-else:
-    release_assets = {}
-
-updated_release_assets = {
-    package_name: assets
-    for package_name, assets in release_assets.items()
-    if not full_rebuild
-    and not any(package_name.endswith(f".{module}") for module in to_delete)
-}
+versions_path = REPO_DIR / "versions.json"
+ledger = versions.load(build_versions_path)
+if versions_path.exists() and versions.load(versions_path) != ledger:
+    raise RuntimeError("versions.json changed on the repo branch after the build read it")
+behind = [
+    package_name
+    for package_name, ext in remote_extensions.items()
+    if ledger.get(package_name, {}).get("versionCode", -1) < ext.versionCode
+]
+if behind:
+    raise RuntimeError(f"versions.json is behind the published index for {behind}")
 
 # Build index entries for the freshly built apks. Each extension's metadata comes from the
 # source-info JSON emitted by its assembleRelease task (see GenerateSourceInfoTask); its APK is a
@@ -91,17 +96,29 @@ for info_file in ARTIFACTS_DIR.glob("**/keiyoushi-source-info.json"):
             f"{package_name}: no release jar found under {info_file.parent}"
         )
 
-    # The apk and jar always ship together, when the content hash (version and signature
-    # independent, see ComputeContentHashTask) or the versionCode changed.
+    # A new version ships when the content hash (version and signature independent, see
+    # ComputeContentHashTask) differs from the last published build's
     content_hash = info["contentHash"]
     remote_ext = remote_extensions.get(package_name)
-    changed = (
-        remote_ext is None
-        or remote_ext.versionCode != info["versionCode"]
-        or release_assets.get(package_name) != content_hash
-    )
+    published = ledger.get(package_name, {})
+    skipped = package_name.removeprefix("eu.kanade.tachiyomi.extension.") in skip_bump
+    if remote_ext is not None and (published.get("contentHash") == content_hash or skipped):
+        ext = index_pb2.Extension()
+        ext.CopyFrom(remote_ext)
+        ext.resources.iconUrl = get_icon_url(info["module"], info.get("theme"))
+        new_extensions.append((ext, apk, jar, False))
+        continue
 
-    updated_release_assets[package_name] = content_hash
+    expected_version = versions.next_version_code(ledger, package_name, info["extensionLib"])
+    if info["versionCode"] != expected_version:
+        raise RuntimeError(
+            f"{package_name}: built as {info['versionCode']}, expected {expected_version} from versions.json"
+        )
+    ledger[package_name] = {
+        "versionCode": info["versionCode"],
+        "contentHash": content_hash,
+        "name": info["name"],
+    }
 
     ext = index_pb2.Extension(
         name=info["name"],
@@ -124,7 +141,7 @@ for info_file in ARTIFACTS_DIR.glob("**/keiyoushi-source-info.json"):
             for source in info["sources"]
         ],
     )
-    new_extensions.append((ext, apk, jar, changed))
+    new_extensions.append((ext, apk, jar, True))
 
 new_extensions.sort(key=lambda item: item[0].packageName)
 
@@ -169,6 +186,11 @@ final_extensions.extend(
 final_extensions.extend(ext for ext, _, _, _ in new_extensions)
 final_extensions.sort(key=lambda ext: ext.packageName)
 
+today = datetime.now(UTC).date().isoformat()
+published_packages = {ext.packageName for ext in final_extensions}
+for package_name in remote_extensions.keys() - published_packages:
+    ledger[package_name]["removed"] = today
+
 index = index_pb2.Index(
     name="Keiyoushi",
     badgeLabel="KEI",
@@ -192,9 +214,8 @@ with REPO_DIR.joinpath("index.json").open("w", encoding="utf-8") as f:
 with REPO_DIR.joinpath("index.pb").open("wb") as f:
     f.write(gzip.compress(index.SerializeToString(deterministic=True), mtime=0))
 
-with release_assets_path.open("w", encoding="utf-8") as f:
-    json.dump(updated_release_assets, f, indent=2, sort_keys=True)
-    f.write("\n")
+versions.dump(ledger, versions_path)
+REPO_DIR.joinpath("release-assets.json").unlink(missing_ok=True)
 
 with REPO_DIR.joinpath("index.html").open("w", encoding="utf-8") as f:
     f.write(

@@ -9,7 +9,6 @@ import androidx.preference.MultiSelectListPreference
 import androidx.preference.PreferenceScreen
 import androidx.preference.SwitchPreferenceCompat
 import eu.kanade.tachiyomi.AppInfo
-import eu.kanade.tachiyomi.extension.BuildConfig
 import eu.kanade.tachiyomi.extension.all.mangadex.dto.AggregateDto
 import eu.kanade.tachiyomi.extension.all.mangadex.dto.AggregateVolume
 import eu.kanade.tachiyomi.extension.all.mangadex.dto.AtHomeDto
@@ -89,7 +88,7 @@ class MangaDex(
     override fun Headers.Builder.configureHeaders(): Headers.Builder = apply {
         val extraHeader = "Android/${Build.VERSION.RELEASE} " +
             "Tachiyomi/${AppInfo.getVersionName()} " +
-            "MangaDex/${BuildConfig.VERSION_NAME} " +
+            "MangaDex/1.6 " +
             "Keiyoushi"
 
         set("User-Agent", "Tachiyomi " + System.getProperty("http.agent"))
